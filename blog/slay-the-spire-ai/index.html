@@ -61,7 +61,7 @@
       "datePublished": "2020-07-12 11:30:19 \u002b1000 AEST",
       "dateModified" : "2020-07-12 11:30:19 \u002b1000 AEST",
       "url" : "https:\/\/acha11.github.io\/blog\/slay-the-spire-ai\/",
-      "wordCount" : "761",
+      "wordCount" : "763",
       "keywords" : ["Blog"]
     }
   
@@ -123,7 +123,7 @@
 <li>Basic AI that can interact with the game (Done)</li>
 <li>Tactical layer - basic planning and execution
 <ul>
-<li>Implement a model of tactical state that updates to reflect a player action, and determine which subsequent moves would be permitted. Support only starter deck cards for now, for one class.</li>
+<li>Implement a model of tactical state that updates to reflect a player action, and determine which subsequent moves would be permitted. Support only starter deck cards for now, for one class. (In progress)</li>
 <li>Implement a heuristic to &ldquo;score&rdquo; tactical state to guide AI planning. (For example, lower player HP would be penalised, defeating the last monster in a battle would be strongly rewarded)</li>
 <li>Implement a planning mechanism that interacts with the tactical state model &amp; scoring heuristic to devise a plan.</li>
 <li>Implement an &ldquo;executor&rdquo; that runs through a plan, issuing commands in sequence. (This might be quite simple, just issuing the first command, accepting the resulting state from the game, and triggering replanning. This is because new information may arrive after executing a command, as some rules are non-deterministic - random cards being discarded, for example).</li>
