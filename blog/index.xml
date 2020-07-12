@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Blogs on acha11 blog</title>
+    <link>https://acha11.github.io/blog/</link>
+    <description>Recent content in Blogs on acha11 blog</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <copyright>© {year}</copyright>
+    <lastBuildDate>Sun, 12 Jul 2020 11:30:19 +1000</lastBuildDate>
+    
+	<atom:link href="https://acha11.github.io/blog/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>Slay the Spire Ai</title>
+      <link>https://acha11.github.io/blog/slay-the-spire-ai/</link>
+      <pubDate>Sun, 12 Jul 2020 11:30:19 +1000</pubDate>
+      
+      <guid>https://acha11.github.io/blog/slay-the-spire-ai/</guid>
+      <description>Slay the Spire is a single-player computer card game. The aim is to fight through an increasingly difficult series of battles to defeat an end boss. The game is run-based, with successful runs lasting around 60 minutes (although this varies a lot depending on style of play).
+Each run consists of many battles. Each battle is fought over multiple turns. During each turn, the player plays cards that attack enemies, defend against enemy attacks, or apply special status effects.</description>
+    </item>
+    
+    <item>
+      <title>First Post</title>
+      <link>https://acha11.github.io/blog/first-post/</link>
+      <pubDate>Sat, 11 Jul 2020 11:43:15 +1000</pubDate>
+      
+      <guid>https://acha11.github.io/blog/first-post/</guid>
+      <description>I&amp;rsquo;m using the Hugo static site generator to generate this site. After settling on github pages as a host, I tried Jekyll (since github has some native support for Jekyll build processes), but getting the necessary bits for Jekyll set up locally was a pain, so I switched to Hugo, building locally.
+Not sure how much I&amp;rsquo;ll blog this time around - let&amp;rsquo;s see how this goes.</description>
+    </item>
+    
+  </channel>
+</rss>
