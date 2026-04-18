@@ -6,8 +6,14 @@
   <title>Laika</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #000; overflow: hidden; }
-    canvas { display: block; }
+    body { background: #000; overflow: hidden; width: 100vw; height: 100vh; }
+    canvas {
+      display: block;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
   </style>
 </head>
 <body>
@@ -21,12 +27,15 @@
       throw new Error('WebGL not supported');
     }
 
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
-    window.addEventListener('resize', () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    });
+    const FW = 320, FH = 240;
+
+    function fitCanvas() {
+      const scale = Math.min(window.innerWidth / FW, window.innerHeight / FH);
+      canvas.width  = Math.round(FW * scale);
+      canvas.height = Math.round(FH * scale);
+    }
+    fitCanvas();
+    window.addEventListener('resize', fitCanvas);
 
     // ── GL helpers ──────────────────────────────────────────────────────────
 
@@ -81,8 +90,6 @@
     const dynBuf = gl.createBuffer();
 
     // ── FBOs 320×240 ─────────────────────────────────────────────────────────
-
-    const FW = 320, FH = 240;
 
     function makeFBO(filter) {
       const tex = gl.createTexture();
