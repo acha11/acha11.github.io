@@ -244,28 +244,38 @@
     // and manual (ArrowLeft/ArrowRight re-shift the global clock to the prev/
     // next scheduled entry).
     const SCENE = {
-      SOLAR_SYSTEM: 'SOLAR_SYSTEM',
-      QUORUM_LOST:  'QUORUM_LOST',
-      RESYNCING:    'RESYNCING',
+      SOLAR_SYSTEM:   'SOLAR_SYSTEM',
+      QUORUM_LOST:    'QUORUM_LOST',
+      QUORUM_SPEARED: 'QUORUM_SPEARED',
+      RESYNCING:      'RESYNCING',
+      PROBE:          'PROBE',
     };
 
     const SCHEDULE = [
-      { t:  0, scene: SCENE.SOLAR_SYSTEM },
-      { t: 20, scene: SCENE.QUORUM_LOST },
-      { t: 24, scene: SCENE.RESYNCING },
-      { t: 26.5, scene: SCENE.SOLAR_SYSTEM },
+      { t:  0,    scene: SCENE.SOLAR_SYSTEM },
+      { t: 20,    scene: SCENE.QUORUM_LOST },
+      { t: 24,    scene: SCENE.RESYNCING },
+      { t: 26.5,  scene: SCENE.SOLAR_SYSTEM },
+      { t: 36.5,  scene: SCENE.PROBE },
+      { t: 300,   scene: SCENE.QUORUM_SPEARED },
     ];
 
     function sceneComponents(scene) {
-      if (scene === SCENE.QUORUM_LOST) return { solarSystem: false, message: 'PEERING QUORUM LOST. SEEKING.' };
-      if (scene === SCENE.RESYNCING)   return { solarSystem: false, message: 'QUORUM REESTABLISHED. RESYNCING...' };
-      return { solarSystem: true, message: null };
+      if (scene === SCENE.QUORUM_LOST)    return { stars: false, solarSystem: false, message: 'PEERING QUORUM LOST. SEEKING.' };
+      if (scene === SCENE.QUORUM_SPEARED) return { stars: false, solarSystem: false, message: 'PEERING QUORUM LOST. SEEKING.' };
+      if (scene === SCENE.RESYNCING)   return { stars: false, solarSystem: false, message: 'QUORUM REESTABLISHED. RESYNCING...' };
+      if (scene === SCENE.PROBE)       return { stars: true,  solarSystem: false, message: null };
+      return { stars: true, solarSystem: true, message: null };
     }
 
     let currentScene = SCHEDULE[0].scene;
-    let scheduleIdx  = -1;                        // highest schedule entry already applied
-    let randomUntil  = 8 + Math.random() * 20;    // first random transition after 8–28 s
-    let timeShift    = 0;                         // adjusted by manual skips so ts_s = raw + timeShift
+    let scheduleIdx  = -1;       // highest schedule entry already applied
+    let timeShift    = 0;        // adjusted by manual skips so ts_s = raw + timeShift
+
+    // QUORUM_LOST peer-count animation state
+    let quorumLostStartT  = -1;
+    let peerCount         = 0;
+    let nextPeerIncrT     = Infinity;
 
     function updateScene(ts_s) {
       // Re-evaluate schedule from scratch each frame so manual jumps (which
@@ -278,20 +288,23 @@
         scheduleIdx = newIdx;
         if (newIdx >= 0) {
           currentScene = SCHEDULE[newIdx].scene;
-          randomUntil  = ts_s + 8 + Math.random() * 20;
+          // Reset peer state whenever we (re-)enter QUORUM_LOST.
+          if (currentScene === SCENE.QUORUM_LOST) {
+            quorumLostStartT = ts_s;
+            peerCount        = 0;
+            nextPeerIncrT    = ts_s + 0.5 + Math.random() * 1.0;
+          }
         }
       }
-      // Random cycle — SOLAR_SYSTEM (8–28 s) → QUORUM_LOST (0.4–2 s) → RESYNCING (2.5 s) → SOLAR_SYSTEM
-      if (ts_s >= randomUntil) {
-        if (currentScene === SCENE.SOLAR_SYSTEM) {
-          currentScene = SCENE.QUORUM_LOST;
-          randomUntil  = ts_s + 0.4 + Math.random() * 1.6;
-        } else if (currentScene === SCENE.QUORUM_LOST) {
-          currentScene = SCENE.RESYNCING;
-          randomUntil  = ts_s + 2.5;
+      // Advance peer count each frame while in QUORUM_LOST.
+      if (currentScene === SCENE.QUORUM_LOST) {
+        if (ts_s - quorumLostStartT >= 3.5) {
+          peerCount = 4;
         } else {
-          currentScene = SCENE.SOLAR_SYSTEM;
-          randomUntil  = ts_s + 8 + Math.random() * 20;
+          while (ts_s >= nextPeerIncrT && peerCount < 3) {
+            peerCount++;
+            nextPeerIncrT = ts_s + 0.5 + Math.random() * 1.0;
+          }
         }
       }
       return currentScene;
@@ -689,7 +702,7 @@
       const activeScene = updateScene(ts_s);
       const components  = sceneComponents(activeScene);
 
-      if (components.solarSystem) {
+      if (components.stars) {
         // Stars — perspective projection so they fill the full screen rectangle.
         // star2D layout: [x, y, brightness] per visible star (stride = 12 bytes).
         // Divide by uSxZ/uSyZ (not SX/SY) so stars stay fixed while solar system zooms.
@@ -716,11 +729,13 @@
         gl.vertexAttribPointer(aPos,        2, gl.FLOAT, false, 12, 0);
         gl.vertexAttribPointer(aBrightness, 1, gl.FLOAT, false, 12, 8);
         gl.drawArrays(gl.POINTS, 0, nStars);
+      }
 
-        gl.disableVertexAttribArray(aBrightness);
-        gl.vertexAttrib1f(aBrightness, 1.0);
-        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+      gl.disableVertexAttribArray(aBrightness);
+      gl.vertexAttrib1f(aBrightness, 1.0);
+      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
 
+      if (components.solarSystem) {
         // Sun
         gl.uniform4f(uColor, 1.0, 1.0, 0.5, 1.0);
         gl.bufferData(gl.ARRAY_BUFFER, sunVerts, gl.DYNAMIC_DRAW);
@@ -742,11 +757,6 @@
           gl.bufferData(gl.ARRAY_BUFFER, tmpV, gl.DYNAMIC_DRAW);
           gl.drawArrays(gl.LINE_STRIP, 0, ORBIT_N + 1);
         }
-      } else {
-        // solar system hidden — restore attrib state so subsequent draws work
-        gl.disableVertexAttribArray(aBrightness);
-        gl.vertexAttrib1f(aBrightness, 1.0);
-        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
       }
 
       // Pie chart — top-right, drawn in clip space
@@ -787,15 +797,24 @@
 
       if (components.message) {
         gl.uniform1f(tUBrightness, 0.9);
+        // Two-line block: centre vertically as a unit
+        const line2 = activeScene === SCENE.QUORUM_LOST    ? `PEERS [${peerCount}/4]`
+                    : activeScene === SCENE.QUORUM_SPEARED ? `PEERS [0/4]`
+                    : activeScene === SCENE.RESYNCING      ? `PEERS [4/4]` : null;
+        const totalH = line2 ? ATLAS_CELL_H * 2 : ATLAS_CELL_H;
+        const blockY = Math.round((FH - totalH) / 2);
         const mx = Math.round((FW - components.message.length * ATLAS_CELL_W) / 2);
-        const my = Math.round((FH - ATLAS_CELL_H) / 2);
-        drawText(components.message, mx, my, 1);
+        drawText(components.message, mx, blockY, 1);
+        if (line2) {
+          const lx = Math.round((FW - line2.length * ATLAS_CELL_W) / 2);
+          drawText(line2, lx, blockY + ATLAS_CELL_H, 1);
+        }
       }
 
       // Bottom-left status — time (0.1s) + current scene name
       gl.uniform1f(tUBrightness, 0.5);
-      const statusStr = `t ${ts_s.toFixed(1).padStart(7)}s  ${currentScene}`;
-      drawText(statusStr, 9, FH - 9 - ATLAS_CELL_H, 1);
+      const statusStr = `t ${ts_s.toFixed(1).padStart(7)}s\n${currentScene}`;
+      drawText(statusStr, 9, FH - 9 - ATLAS_CELL_H * 2, 1);
 
       // Scrolling log panel — bottom-right, per-line brightness decay
       const logLineH   = ATLAS_CELL_H * LOG_SCALE;
