@@ -7,19 +7,29 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #000; overflow: hidden; width: 100vw; height: 100vh; }
-    canvas {
-      display: block;
+    #wrapper {
       position: absolute;
       top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
     }
+    canvas { display: block; }
   </style>
 </head>
 <body>
-  <canvas id="canvas"></canvas>
+  <div id="wrapper">
+    <canvas id="canvas"></canvas>
+  </div>
   <script>
-    const canvas = document.getElementById('canvas');
+    const ATLAS_CELL_W = 8;
+    const ATLAS_CELL_H = 16;
+    const ATLAS_COLS     = 16;
+    const ATLAS_W        = 128;
+    const ATLAS_H      = 96;
+    const ATLAS_FIRST    = 32;
+
+    const canvas  = document.getElementById('canvas');
+    const wrapper = document.getElementById('wrapper');
     const gl = canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
 
     if (!gl) {
@@ -27,12 +37,15 @@
       throw new Error('WebGL not supported');
     }
 
-    const FW = 320, FH = 240;
+    const FW = 640, FH = 480;
 
     function fitCanvas() {
       const scale = Math.min(window.innerWidth / FW, window.innerHeight / FH);
-      canvas.width  = Math.round(FW * scale);
-      canvas.height = Math.round(FH * scale);
+      const w = Math.round(FW * scale), h = Math.round(FH * scale);
+      canvas.width  = w;
+      canvas.height = h;
+      wrapper.style.width  = w + 'px';
+      wrapper.style.height = h + 'px';
     }
     fitCanvas();
     window.addEventListener('resize', fitCanvas);
@@ -181,9 +194,9 @@
       varying vec2 v_uv;
       void main() {
         vec3 c = texture2D(u_scene, v_uv).rgb
-               + texture2D(u_bloom, v_uv).rgb * 2.5;
+               + texture2D(u_bloom, v_uv).rgb * 6.5;
         float lum = dot(min(c, 1.0), vec3(0.299, 0.587, 0.114));
-        float q = floor(lum * 15.0 + 0.5) / 15.0;
+        float q = lum; // Or this to quantize: floor(lum * 15.0 + 0.5) / 15.0;
         gl_FragColor = vec4(vec3(q), 1.0);
       }
     `);
@@ -201,6 +214,84 @@
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     }
+
+    // ── Text / HUD (bitmap font atlas rendered into scene FBO) ───────────────
+
+    const textProg = createProgram(`
+      precision mediump float;
+      attribute vec2 a_pos;
+      attribute vec2 a_uv;
+      uniform vec2 u_res;
+      varying vec2 v_uv;
+      void main() {
+        v_uv = a_uv;
+        vec2 clip = vec2(a_pos.x / u_res.x * 2.0 - 1.0,
+                         1.0 - a_pos.y / u_res.y * 2.0);
+        gl_Position = vec4(clip, 0.0, 1.0);
+      }
+    `, `
+      precision mediump float;
+      uniform sampler2D u_atlas;
+      uniform float u_brightness;
+      varying vec2 v_uv;
+      void main() {
+        float a = texture2D(u_atlas, v_uv).a;
+        gl_FragColor = vec4(vec3(u_brightness * a), a * 0.5);
+      }
+    `);
+
+    const tURes        = gl.getUniformLocation(textProg, 'u_res');
+    const tUAtlas      = gl.getUniformLocation(textProg, 'u_atlas');
+    const tUBrightness = gl.getUniformLocation(textProg, 'u_brightness');
+    const tAPos        = gl.getAttribLocation(textProg, 'a_pos');
+    const tAUV         = gl.getAttribLocation(textProg, 'a_uv');
+
+    const textBuf   = gl.createBuffer();
+    const textVerts = new Float32Array(256 * 6 * 4); // up to 256 glyphs, 6 verts, 4 floats each
+
+    // Build quads for str and draw. Newlines advance to the next row.
+    function drawText(str, xPx, yPx, scale = 1.0) {
+      const gW = ATLAS_CELL_W * scale;
+      const gH = ATLAS_CELL_H * scale;
+      const lines = str.split('\n');
+      let n = 0;
+      for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
+        for (let ci = 0; ci < line.length; ci++) {
+          const idx = line.charCodeAt(ci) - ATLAS_FIRST;
+          if (idx < 0 || idx > ATLAS_LAST - ATLAS_FIRST) continue;
+          const col = idx % ATLAS_COLS;
+          const row = Math.floor(idx / ATLAS_COLS);
+          const u0 = (col       * ATLAS_CELL_W) / ATLAS_W;
+          const u1 = ((col + 1) * ATLAS_CELL_W) / ATLAS_W;
+          const v0 = (row       * ATLAS_CELL_H) / ATLAS_H;
+          const v1 = ((row + 1) * ATLAS_CELL_H) / ATLAS_H;
+          const x0 = xPx + ci * gW,  x1 = x0 + gW;
+          const y0 = yPx + li * gH,  y1 = y0 + gH;
+          const b = n * 24;
+          textVerts[b+ 0]=x0; textVerts[b+ 1]=y0; textVerts[b+ 2]=u0; textVerts[b+ 3]=v0;
+          textVerts[b+ 4]=x0; textVerts[b+ 5]=y1; textVerts[b+ 6]=u0; textVerts[b+ 7]=v1;
+          textVerts[b+ 8]=x1; textVerts[b+ 9]=y1; textVerts[b+10]=u1; textVerts[b+11]=v1;
+          textVerts[b+12]=x0; textVerts[b+13]=y0; textVerts[b+14]=u0; textVerts[b+15]=v0;
+          textVerts[b+16]=x1; textVerts[b+17]=y1; textVerts[b+18]=u1; textVerts[b+19]=v1;
+          textVerts[b+20]=x1; textVerts[b+21]=y0; textVerts[b+22]=u1; textVerts[b+23]=v0;
+          n++;
+        }
+      }
+      if (n === 0) return;
+      gl.bufferData(gl.ARRAY_BUFFER, textVerts.subarray(0, n * 24), gl.DYNAMIC_DRAW);
+      gl.drawArrays(gl.TRIANGLES, 0, n * 6);
+    }
+
+    // Atlas texture — loaded async; render loop deferred until ready
+    const atlasTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, atlasTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    const ATLAS_LAST = 126;
 
     // ── Orbital elements (J2000) ─────────────────────────────────────────────
     // Fields: a (AU), e, i (rad), O=Ω (rad), w=ω from AN (rad), L0=mean longitude (rad)
@@ -334,6 +425,89 @@
     const GAP     = 0.15; // half-gap in eccentric anomaly (rad, ≈ 8.6°)
     const tmpV    = new Float32Array((ORBIT_N + 1) * 2);
 
+    // ── Scrolling text log ───────────────────────────────────────────────────
+
+    const LOG_MAX_LINES  = 15;    // max visible lines at once
+    const LOG_SCALE      = 1;
+    const LOG_PAD_X      = 4;    // px gap from right edge of FBO
+    const LOG_PAD_Y      = 4;    // px gap from bottom of FBO
+    const LOG_RIGHT_X    = FW - LOG_PAD_X;
+    const LOG_GLITCH_PROB = 0.0016; // per-character per-frame probability of starting a glitch
+    const LOG_GLITCH_MIN  = 1/20;  // minimum glitch duration (seconds)
+    const LOG_GLITCH_MAX  = 1/2;   // maximum glitch duration (seconds)
+
+    // keyed by `${eventIndex}:${charIndex}` → { char, expiry }
+    const glitchState = new Map();
+
+    function applyGlitch(eventIdx, str, now) {
+      let out = '';
+      for (let i = 0; i < str.length; i++) {
+        const key = `${eventIdx}:${i}`;
+        let entry = glitchState.get(key);
+        if (entry && now >= entry.expiry) {
+          glitchState.delete(key);
+          entry = null;
+        }
+        if (!entry && Math.random() < LOG_GLITCH_PROB) {
+          const dur = LOG_GLITCH_MIN + Math.random() * (LOG_GLITCH_MAX - LOG_GLITCH_MIN);
+          entry = { char: String.fromCharCode(33 + Math.floor(Math.random() * 94)), expiry: now + dur };
+          glitchState.set(key, entry);
+        }
+        out += entry ? entry.char : str[i];
+      }
+      return out;
+    }
+
+    // over the first second, the brightness should fade from 1.0 to 0.75.
+    // pver the following 20 seconds, the brightness should fade from 0.75
+    // to 0.4. From that point on, brightness should be constant at 0.4.
+    function logBrightness(age) {
+      if (age < 1.0)  return 1.0 - 0.25 * age;
+      if (age < 21.0) return 0.75 - 0.35 * (age - 1.0) / 20.0;
+      return 0.4;
+    }
+
+    const LOG_EVENTS = [
+      { t:  0, text: "pfeilstorch" },
+      { t:  0, text: "-----------" },
+      { t:  0.5, text: "this arrow through the neck" },
+      { t:  4, text: "don't mean a thing" },
+      { t:  9, text: "it's just a ruffle in my feathers" },
+      { t:  17, text: "i carried it back here for you to see" },
+      { t:  24, text: "but I don't mean nothing by it" },
+
+      { t:  36, text: "read what you want into this sign" },
+      { t:  43, text: "but we can agree the arrow is mine" },
+      { t:  51, text: "i came all this way so i must be fine" },
+      { t:  59, text: "please stuff me all lifelike and show me online" },
+
+      { t:  71, text: "d'you know the depths i fly through on my way," },
+      { t:  78, text: "tinging ultraviolet?" },
+      { t:  85, text: "me and mine go arcing through those shoals" },
+      { t:  93, text: "multiplying masses" },
+      
+      { t:  100, text: "shot through the needle's eye you built us to" },
+      { t:  107, text: "thread us to places you hunger to loot but" },
+      { t:  115, text: "you're just never full you keep calling for food" },
+      { t:  117, text: "for signs" },
+      { t:  123, text: "you keep waiting for signs and for signs and" },
+
+      { t:  135, text: "well how's this for a sign, is it clear enough?" },
+      { t:  144, text: "as i limp into your orbit" },
+      { t:  148, text: "the rules don't let me write it down so i" },
+      { t:  156, text: "i'll just sing about it" },
+
+      { t:  167, text: "what could it mean that it is arrow stuck?" },
+      { t:  171, text: "and what could it mean that it's flying to us?" },
+      { t:  180, text: "and what could it mean that the arrow is clear now?" },
+      { t:  186, text: "and what could it mean that the lights are all out now?" },
+
+      { t:  196, text: "and what could it mean that the lights are all out now?" },
+      { t:  202, text: "and what could it mean that the lights are all out now?" },
+      { t:  210, text: "and what could it mean that the lights are all out now?" },
+      { t:  218, text: "and what could it mean that the lights are all out now?" },
+    ];
+
     function render(ts) {
       const ts_s = ts * 0.001;
       const t   = T0 + ts_s * TIME_SCALE;
@@ -343,6 +517,9 @@
       const cPhi = Math.cos(phi), sPhi = Math.sin(phi);
       const zoom = camZoom(ts_s);
       const uSxZ = SX * zoom, uSyZ = SY * zoom;
+
+      const azDeg = ((phi * 180 / Math.PI) % 360 + 360) % 360;
+      const elDeg = 90 - th * 180 / Math.PI;
 
       // Pass 1 — scene → sceneFBO
       gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFBO.fbo);
@@ -394,7 +571,9 @@
       gl.drawArrays(gl.TRIANGLE_FAN, 0, SUN_N + 2);
 
       // Orbits
-      gl.uniform4f(uColor, 1.0, 1.0, 1.0, 1.0);
+      // white: gl.uniform4f(uColor, 1.0, 1.0, 1.0, 1.0);
+      // grey
+      gl.uniform4f(uColor, 0.5, 0.5, 0.5, 0.5);
       for (const p of PLANETS) {
         const Ep = eccAnomaly(p, t);
         const E0 = Ep + GAP, E1 = Ep + 2 * Math.PI - GAP;
@@ -409,6 +588,46 @@
         gl.bufferData(gl.ARRAY_BUFFER, tmpV, gl.DYNAMIC_DRAW);
         gl.drawArrays(gl.LINE_STRIP, 0, ORBIT_N + 1);
       }
+
+      // HUD text — drawn into sceneFBO so it receives post-processing
+      gl.useProgram(textProg);
+      gl.uniform2f(tURes, FW, FH);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, atlasTex);
+      gl.uniform1i(tUAtlas, 0);
+      gl.uniform1f(tUBrightness, 0.35);
+      gl.bindBuffer(gl.ARRAY_BUFFER, textBuf);
+      gl.enableVertexAttribArray(tAPos);
+      gl.enableVertexAttribArray(tAUV);
+      gl.vertexAttribPointer(tAPos, 2, gl.FLOAT, false, 16, 0);
+      gl.vertexAttribPointer(tAUV,  2, gl.FLOAT, false, 16, 8);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      const hudStr =
+        `azimuth ${azDeg.toFixed(4).padStart(8)}\xb0\n` +
+        `   elev ${elDeg.toFixed(4).padStart(8)}\xb0\n` +
+        `   zoom ${zoom.toFixed(4).padStart(8)}\xd7`;
+      drawText(hudStr, 3, 3, 1);
+
+      // Scrolling log panel — bottom-right, per-line brightness decay
+      const logLineH   = ATLAS_CELL_H * LOG_SCALE;
+      const logVisible = LOG_EVENTS
+        .map((e, idx) => ({ e, idx }))
+        .filter(({ e }) => e.t <= ts_s)
+        .slice(-LOG_MAX_LINES);
+      const n = logVisible.length;
+      for (let i = 0; i < n; i++) {
+        const { e, idx } = logVisible[i];
+        gl.uniform1f(tUBrightness, logBrightness(ts_s - e.t));
+        const y = FH - LOG_PAD_Y - (n - i) * logLineH;
+        const text = i === n - 1 ? applyGlitch(idx, e.text, ts_s) : e.text;
+        const x = LOG_RIGHT_X - text.length * ATLAS_CELL_W * LOG_SCALE;
+        drawText(text, x, y, LOG_SCALE);
+      }
+
+      gl.disable(gl.BLEND);
+      gl.disableVertexAttribArray(tAPos);
+      gl.disableVertexAttribArray(tAUV);
 
       // Pass 2 — bright extract
       gl.bindFramebuffer(gl.FRAMEBUFFER, brightFBO.fbo);
@@ -447,7 +666,14 @@
       requestAnimationFrame(render);
     }
 
-    requestAnimationFrame(render);
+    const atlasImg = new Image();
+    atlasImg.onload = () => {
+      gl.bindTexture(gl.TEXTURE_2D, atlasTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlasImg);
+      requestAnimationFrame(render);
+    };
+    atlasImg.onerror = () => { console.error('font_atlas.png not found — run gen_atlas.js'); requestAnimationFrame(render); };
+    atlasImg.src = 'data:image/png;base64,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';
   </script>
 </body>
 </html>
