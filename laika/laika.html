@@ -16,12 +16,15 @@
     canvas { display: block; }
   </style>
   <script src="js/solar_system.js"></script>
+  <script src="js/solar_system2.js"></script>
   <script src="js/corona.js"></script>
   <script src="js/warp_stars.js"></script>
   <script src="js/voyager.js"></script>
   <script src="js/earth.js"></script>
+  <script src="js/earth_satellites.js"></script>
   <script src="js/hv_net.js"></script>
   <script src="js/sierpinski.js"></script>
+  <script src="js/grass.js"></script>
   <script src="js/text_renderer.js"></script>
 </head>
 <body>
@@ -253,29 +256,34 @@
     // and manual (ArrowLeft/ArrowRight re-shift the global clock to the prev/
     // next scheduled entry).
     const SCENE = {
-      SOLAR_SYSTEM:   'SOLAR_SYSTEM',
+      SOLAR_SYSTEM:    'SOLAR_SYSTEM',
+      SOLAR_SYSTEM2:   'SOLAR_SYSTEM2',
       QUORUM_LOST:    'QUORUM_LOST',
       QUORUM_SPEARED: 'QUORUM_SPEARED',
       RESYNCING:      'RESYNCING',
       PROBE:               'PROBE',
       PROBE_INTERSTELLAR:  'PROBE_INTERSTELLAR',
       EARTH:               'EARTH',
+      EARTH_SATELLITES:    'EARTH_SATELLITES',
       CORONA:              'CORONA',
       HV_NET:              'HV_NET',
       SIERPINSKI:          'SIERPINSKI',
+      GRASS:               'GRASS',
     };
 
     const SCHEDULE = [
       { t:  0,    scene: SCENE.SOLAR_SYSTEM },
       { t: 20,    scene: SCENE.QUORUM_LOST },
       { t: 24,    scene: SCENE.RESYNCING },
-      { t: 26.5,  scene: SCENE.SOLAR_SYSTEM },
+      { t: 26.5,  scene: SCENE.SOLAR_SYSTEM2 },
       { t: 36.5,  scene: SCENE.PROBE },
       { t: 46.5,  scene: SCENE.PROBE_INTERSTELLAR },
       { t: 56.5,  scene: SCENE.EARTH },
-      { t: 66.5,  scene: SCENE.CORONA },
-      { t: 76.5,  scene: SCENE.HV_NET },
-      { t: 86.5,  scene: SCENE.SIERPINSKI },
+      { t: 66.5,  scene: SCENE.EARTH_SATELLITES },
+      { t: 81.5,  scene: SCENE.CORONA },
+      { t: 101.5, scene: SCENE.HV_NET },
+      { t: 111.5, scene: SCENE.SIERPINSKI },
+      { t: 141.5, scene: SCENE.GRASS },
       { t: 300,   scene: SCENE.QUORUM_SPEARED },
     ];
 
@@ -286,9 +294,12 @@
       if (scene === SCENE.PROBE)              return { stars: true,  solarSystem: false, message: null };
       if (scene === SCENE.PROBE_INTERSTELLAR) return { stars: false, solarSystem: false, message: null };
       if (scene === SCENE.EARTH)              return { stars: true,  solarSystem: false, message: null };
+      if (scene === SCENE.EARTH_SATELLITES)   return { stars: true,  solarSystem: false, message: null };
       if (scene === SCENE.CORONA)             return { stars: true,  solarSystem: false, message: null };
       if (scene === SCENE.HV_NET)             return { stars: false, solarSystem: false, message: null };
       if (scene === SCENE.SIERPINSKI)         return { stars: false, solarSystem: false, message: null };
+      if (scene === SCENE.GRASS)              return { stars: true,  solarSystem: false, message: null };
+      if (scene === SCENE.SOLAR_SYSTEM2)      return { stars: true,  solarSystem: false, message: null };
       return { stars: true, solarSystem: true, message: null };
     }
 
@@ -651,7 +662,8 @@
       m[12]=tx; m[13]=ty; m[14]=tz; return m;
     }
 
-    const voyager = new Voyager(gl, FW / FH);
+    const voyager      = new Voyager(gl, FW / FH);
+    const solarSystem2 = new SolarSystem2(gl, FW, FH);
 
     // ── PROBE_INTERSTELLAR warp starfield ────────────────────────────────────
 
@@ -659,20 +671,22 @@
 
     // ── Earth wireframe (EARTH scene) ────────────────────────────────────────
 
-    const earth = new Earth(gl, FW / FH);
+    const earth           = new Earth(gl, FW / FH);
+    const earthSatellites = new EarthSatellites(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.EARTH_SATELLITES).t);
 
     // ── HV_NET: delta-mast transmission tower flyby ──────────────────────────
 
-    const hvNet = new HvNet(gl, FW / FH);
+    const hvNet = new HvNet(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.HV_NET).t);
 
 
     // ── CORONA fire cellular automaton ───────────────────────────────────────
 
-    const corona = new Corona(gl);
+    const corona = new Corona(gl, SCHEDULE.find(e => e.scene === SCENE.CORONA).t);
 
     // ── SIERPINSKI STORK: billboard impostors at fractal leaf positions ──────────
 
-    const sierpinski = new Sierpinski(gl, FW / FH);
+    const sierpinski = new Sierpinski(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.SIERPINSKI).t);
+    const grass      = new Grass(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.GRASS).t);
 
     let fpsPrev = 0, fpsEma = 60;
 
@@ -767,8 +781,11 @@
       if (activeScene === SCENE.HV_NET)       hvNet.draw(ts_s);
       if (activeScene === SCENE.SIERPINSKI)   sierpinski.draw(ts_s);
       if (activeScene === SCENE.PROBE || activeScene === SCENE.PROBE_INTERSTELLAR) voyager.draw(ts_s);
+      if (activeScene === SCENE.SOLAR_SYSTEM2) solarSystem2.draw(ts_s);
       if (activeScene === SCENE.EARTH) earth.draw(ts_s);
-      if (activeScene === SCENE.CORONA) corona.draw();
+      if (activeScene === SCENE.EARTH_SATELLITES) earthSatellites.draw(ts_s);
+      if (activeScene === SCENE.CORONA) corona.draw(ts_s);
+      if (activeScene === SCENE.GRASS)  grass.draw(ts_s);
 
       // Pie chart — top-right, drawn in clip space
       const pieShrinkStart = 2;
@@ -876,6 +893,7 @@
     Promise.all([
       voyager.init(),
       earth.init(),
+      earthSatellites.init(),
       sierpinski.init(),
       new Promise((res, rej) => textRenderer.loadAtlas('assets/font_atlas.png', res, rej))
         .catch(() => console.error('font_atlas.png not found — run gen_atlas.js')),

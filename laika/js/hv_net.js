@@ -1,13 +1,13 @@
 class HvNet {
-  static T0        = 76.5;
   static N         = 8;
   static CAM_SPEED = 160;
   static SPACING   = 64;
   static CLUTTER_N = 400;
 
-  constructor(gl, aspect) {
+  constructor(gl, aspect, t0) {
     this.gl     = gl;
     this.aspect = aspect;
+    this.t0     = t0;
     this._initPrograms();
     this._initGeometry();
   }
@@ -122,18 +122,23 @@ class HvNet {
 
   draw(ts_s) {
     const gl = this.gl;
-    const { T0, N, CAM_SPEED, SPACING, CLUTTER_N } = HvNet;
-    const st   = Math.max(0, ts_s - T0);
-    const camZ = (st * CAM_SPEED) % SPACING;
+    const { N, CAM_SPEED, SPACING, CLUTTER_N } = HvNet;
+    const st     = Math.max(0, ts_s - this.t0);
+    // Speed ramps linearly from 0 → CAM_SPEED over 5 s; integrate for position
+    const travelZ = st <= 5
+      ? CAM_SPEED * st * st / 10
+      : CAM_SPEED * (st - 2.5);
+    const camZ    = travelZ % SPACING;
+    const oscFade = Math.min(st / 2.0, 1.0);
     const proj = mat4pers(52 * Math.PI / 180, this.aspect, 0.3, 600);
-    const camY = 2.775
-      + 1.2375 * Math.sin(2*Math.PI*st/5.0)
+    const camY = 2.775 + oscFade * (
+        1.2375 * Math.sin(2*Math.PI*st/5.0)
       + 0.3125 * Math.sin(2*Math.PI*st/2.3)
-      + 0.125  * Math.sin(2*Math.PI*st/1.1);
-    const camX = -14
-      + 5.0 * Math.sin(2*Math.PI*st/14.0)
+      + 0.125  * Math.sin(2*Math.PI*st/1.1));
+    const camX = -14 + oscFade * (
+        5.0 * Math.sin(2*Math.PI*st/14.0)
       + 1.5 * Math.sin(2*Math.PI*st/6.2)
-      + 0.5 * Math.sin(2*Math.PI*st/2.8);
+      + 0.5 * Math.sin(2*Math.PI*st/2.8));
     const view = mat4look(camX, camY, camZ,  camX+12.5, camY-8.24, camZ+35,  0, 1, 0);
 
     gl.enable(gl.DEPTH_TEST);

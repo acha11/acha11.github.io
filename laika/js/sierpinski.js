@@ -1,12 +1,12 @@
 class Sierpinski {
-  static R       = 4.0;
-  static DEPTH   = 3;
-  static T0      = 86.5;
-  static ASPECT  = 612 / 439; // stork image width / height
+  static R      = 4.0;
+  static DEPTH  = 3;
+  static ASPECT = 612 / 439; // stork image width / height
 
-  constructor(gl, aspect) {
+  constructor(gl, aspect, t0) {
     this.gl     = gl;
     this.aspect = aspect;
+    this.t0     = t0;
     this._ready = false;
     this._initProgram();
     this._initGeometry();
@@ -59,8 +59,8 @@ class Sierpinski {
       return [...leaves(v0,m01,m02,depth-1), ...leaves(m01,v1,m12,depth-1), ...leaves(m02,m12,v2,depth-1)];
     }
 
-    // Triangle in XZ plane, 15° Y rotation: apex far, base close
-    const s15 = 15*Math.PI/180, c15 = Math.cos(s15), sn15 = Math.sin(s15);
+    // Triangle in XZ plane, 45° Y rotation: apex far, base close
+    const s15 = 45*Math.PI/180, c15 = Math.cos(s15), sn15 = Math.sin(s15);
     this._leaves = leaves(
       [0, -R*1.5], [-R*Math.sqrt(3)/2, 0], [R*Math.sqrt(3)/2, 0], DEPTH
     ).map(({ c, hs }) => {
@@ -112,8 +112,8 @@ class Sierpinski {
   draw(ts_s) {
     if (!this._ready) return;
     const gl = this.gl;
-    const { T0, ASPECT } = Sierpinski;
-    const st = Math.max(0, ts_s - T0);
+    const { ASPECT } = Sierpinski;
+    const st = Math.max(0, ts_s - this.t0);
 
     const ZOOM_DELAY = 3.0, ZOOM_DUR = 24.0;
     const tZ   = Math.min(Math.max(st - ZOOM_DELAY, 0) / ZOOM_DUR, 1.0);
@@ -139,7 +139,7 @@ class Sierpinski {
     }
 
     const ac = this._apexC;
-    const dist = 2.0 + (16.0 - 2.0) * ease;
+    const dist = 1.0 + (200.0 - 1.0) * ease;
     const ey   = 0.5 + (2.0 - 0.5)  * ease;
     const tx   = ac[0] * (1-ease) + 0.78 * ease;
     const ty_t = ac[1] * (1-ease) + (-1)  * ease;

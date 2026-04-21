@@ -1,10 +1,11 @@
 class Corona {
-  static W = 80;
+  static W = 160;
   static H = 60;
 
-  constructor(gl) {
-    this.gl    = gl;
-    this._frame = 0;
+  constructor(gl, t0) {
+    this.gl        = gl;
+    this.t0        = t0;
+    this._lastStep = 0;
     this._ejections = [];
     this._cells  = new Float32Array(Corona.W * Corona.H);
     this._pixels = new Uint8Array(Corona.W * Corona.H);
@@ -23,11 +24,13 @@ class Corona {
       precision mediump float;
       varying vec2 v_uv;
       uniform sampler2D u_fire;
+      uniform float u_zoom;
+      uniform float u_center_y;
       void main() {
         const float PI     = 3.14159265;
         const float RADIUS = 0.22;
         const float REACH  = 0.25;
-        vec2 p = v_uv - 0.5;
+        vec2 p = vec2(v_uv.x - 0.5, v_uv.y - u_center_y) / u_zoom;
         p.x *= (320.0 / 240.0);
         float dist  = length(p);
         float fireU = atan(p.y, p.x) / (2.0 * PI) + 0.5;
@@ -40,7 +43,9 @@ class Corona {
         gl_FragColor = mix(discCol, fireCol, edge);
       }
     `);
-    this._uFire = gl.getUniformLocation(this._prog, 'u_fire');
+    this._uFire    = gl.getUniformLocation(this._prog, 'u_fire');
+    this._uZoom    = gl.getUniformLocation(this._prog, 'u_zoom');
+    this._uCenterY = gl.getUniformLocation(this._prog, 'u_center_y');
     this._aPos  = gl.getAttribLocation(this._prog, 'a_pos');
   }
 
@@ -119,11 +124,19 @@ class Corona {
     gl.bindTexture(gl.TEXTURE_2D, null);
   }
 
-  draw() {
+  draw(ts_s) {
     const gl = this.gl;
+    const st      = Math.max(0, ts_s - this.t0);
+    const tZ      = Math.min(st / 8.0, 1.0);
+    const ease    = tZ * tZ * tZ;
+    const zoom    = 1.0 + (2.5 - 1.0) * ease;
+    const centerY = 0.5 - 0.11 * ease * zoom; // tracks look-at from sun centre → midpoint of sun radius
 
-    // Step CA every other frame
-    if (this._frame++ % 2 === 0) this._stepCA();
+    const now = performance.now();
+    if (now - this._lastStep >= 1000 / 30) {
+      this._stepCA();
+      this._lastStep = now;
+    }
 
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
@@ -132,6 +145,8 @@ class Corona {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this._tex);
     gl.uniform1i(this._uFire, 0);
+    gl.uniform1f(this._uZoom, zoom);
+    gl.uniform1f(this._uCenterY, centerY);
     gl.bindBuffer(gl.ARRAY_BUFFER, this._quadBuf);
     gl.enableVertexAttribArray(this._aPos);
     gl.vertexAttribPointer(this._aPos, 2, gl.FLOAT, false, 0, 0);
