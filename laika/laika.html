@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Laika</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; width: 100vw; height: 100vh; }
+    #wrapper {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+    canvas { display: block; }
+  </style>
+  <script src="js/solar_system.js"></script>
+  <script src="js/corona.js"></script>
+  <script src="js/warp_stars.js"></script>
+  <script src="js/voyager.js"></script>
+  <script src="js/earth.js"></script>
+  <script src="js/hv_net.js"></script>
+  <script src="js/sierpinski.js"></script>
+  <script src="js/text_renderer.js"></script>
+</head>
+<body>
+  <div id="wrapper">
+    <canvas id="canvas"></canvas>
+  </div>
+  <script>
+    const canvas  = document.getElementById('canvas');
+    const wrapper = document.getElementById('wrapper');
+    const gl = canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+
+    if (!gl) {
+      document.body.innerHTML = '<p style="color:white;padding:2rem">WebGL not supported</p>';
+      throw new Error('WebGL not supported');
+    }
+
+    const FW = 640, FH = 480;
+
+    function fitCanvas() {
+      const scale = Math.min(window.innerWidth / FW, window.innerHeight / FH);
+      const w = Math.round(FW * scale), h = Math.round(FH * scale);
+      canvas.width  = w;
+      canvas.height = h;
+      wrapper.style.width  = w + 'px';
+      wrapper.style.height = h + 'px';
+    }
+    fitCanvas();
+    window.addEventListener('resize', fitCanvas);
+
+    // ── GL helpers ──────────────────────────────────────────────────────────
+
+    function createShader(type, src) {
+      const s = gl.createShader(type);
+      gl.shaderSource(s, src);
+      gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        const log = gl.getShaderInfoLog(s); gl.deleteShader(s);
+        throw new Error('Shader: ' + log);
+      }
+      return s;
+    }
+
+    function createProgram(vs, fs) {
+      const p = gl.createProgram();
+      gl.attachShader(p, createShader(gl.VERTEX_SHADER, vs));
+      gl.attachShader(p, createShader(gl.FRAGMENT_SHADER, fs));
+      gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+        throw new Error('Program: ' + gl.getProgramInfoLog(p));
+      return p;
+    }
+
+    // ── Scene program (flat-colour 2D geometry with aspect-correct scale) ───
+
+    const sceneProg = createProgram(`
+      precision mediump float;
+      attribute vec2 a_pos;
+      attribute float a_brightness;
+      uniform float u_sx;
+      uniform float u_sy;
+      varying float v_brightness;
+      void main() {
+        gl_PointSize = 1.0;
+        v_brightness = a_brightness;
+        gl_Position = vec4(a_pos.x * u_sx, a_pos.y * u_sy, 0.0, 1.0);
+      }
+    `, `
+      precision mediump float;
+      uniform vec4 u_color;
+      varying float v_brightness;
+      void main() { gl_FragColor = u_color * v_brightness; }
+    `);
+
+    const uSx         = gl.getUniformLocation(sceneProg, 'u_sx');
+    const uSy         = gl.getUniformLocation(sceneProg, 'u_sy');
+    const uColor      = gl.getUniformLocation(sceneProg, 'u_color');
+    const aPos        = gl.getAttribLocation(sceneProg, 'a_pos');
+    const aBrightness = gl.getAttribLocation(sceneProg, 'a_brightness');
+
+    const dynBuf = gl.createBuffer();
+
+    // ── FBOs 320×240 ─────────────────────────────────────────────────────────
+
+    function makeFBO(filter) {
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, FW, FH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      const fbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return { fbo, tex };
+    }
+
+    const sceneFBO  = makeFBO(gl.NEAREST); // scene render
+    // Depth buffer for sceneFBO — required for 3D model rendering in PROBE scene
+    const sceneDepth = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, sceneDepth);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, FW, FH);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFBO.fbo);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, sceneDepth);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    const brightFBO = makeFBO(gl.LINEAR);  // bright-pass extract
+    const blurHFBO  = makeFBO(gl.LINEAR);  // horizontal gaussian blur
+    const blurVFBO  = makeFBO(gl.LINEAR);  // vertical gaussian blur → bloom
+
+    // ── Fullscreen-quad programs (bloom pipeline + final composite) ──────────
+
+    const quadBuf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+    gl.bufferData(gl.ARRAY_BUFFER,
+      new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+
+    const QUAD_VS = `
+      precision mediump float;
+      attribute vec2 a_pos;
+      varying vec2 v_uv;
+      void main() { v_uv = a_pos * 0.5 + 0.5; gl_Position = vec4(a_pos, 0.0, 1.0); }
+    `;
+
+    // Bright-pass: subtract threshold, clamp — only the luminous parts bloom
+    const brightProg = createProgram(QUAD_VS, `
+      precision mediump float;
+      uniform sampler2D u_tex;
+      varying vec2 v_uv;
+      void main() {
+        vec3 c = texture2D(u_tex, v_uv).rgb;
+        gl_FragColor = vec4(max(c - 0.15, 0.0), 1.0);
+      }
+    `);
+
+    // Separable 13-tap gaussian blur (σ≈3); direction supplied per-pass
+    const blurProg = createProgram(QUAD_VS, `
+      precision mediump float;
+      uniform sampler2D u_tex;
+      uniform vec2 u_dir;
+      varying vec2 v_uv;
+      void main() {
+        vec3 c = vec3(0.0);
+        c += texture2D(u_tex, v_uv + u_dir * -12.0).rgb * 0.0093;
+        c += texture2D(u_tex, v_uv + u_dir * -11.0).rgb * 0.0129;
+        c += texture2D(u_tex, v_uv + u_dir * -10.0).rgb * 0.0172;
+        c += texture2D(u_tex, v_uv + u_dir *  -9.0).rgb * 0.0224;
+        c += texture2D(u_tex, v_uv + u_dir *  -8.0).rgb * 0.0284;
+        c += texture2D(u_tex, v_uv + u_dir *  -7.0).rgb * 0.0350;
+        c += texture2D(u_tex, v_uv + u_dir *  -6.0).rgb * 0.0419;
+        c += texture2D(u_tex, v_uv + u_dir *  -5.0).rgb * 0.0488;
+        c += texture2D(u_tex, v_uv + u_dir *  -4.0).rgb * 0.0553;
+        c += texture2D(u_tex, v_uv + u_dir *  -3.0).rgb * 0.0609;
+        c += texture2D(u_tex, v_uv + u_dir *  -2.0).rgb * 0.0653;
+        c += texture2D(u_tex, v_uv + u_dir *  -1.0).rgb * 0.0681;
+        c += texture2D(u_tex, v_uv                ).rgb * 0.0691;
+        c += texture2D(u_tex, v_uv + u_dir *   1.0).rgb * 0.0681;
+        c += texture2D(u_tex, v_uv + u_dir *   2.0).rgb * 0.0653;
+        c += texture2D(u_tex, v_uv + u_dir *   3.0).rgb * 0.0609;
+        c += texture2D(u_tex, v_uv + u_dir *   4.0).rgb * 0.0553;
+        c += texture2D(u_tex, v_uv + u_dir *   5.0).rgb * 0.0488;
+        c += texture2D(u_tex, v_uv + u_dir *   6.0).rgb * 0.0419;
+        c += texture2D(u_tex, v_uv + u_dir *   7.0).rgb * 0.0350;
+        c += texture2D(u_tex, v_uv + u_dir *   8.0).rgb * 0.0284;
+        c += texture2D(u_tex, v_uv + u_dir *   9.0).rgb * 0.0224;
+        c += texture2D(u_tex, v_uv + u_dir *  10.0).rgb * 0.0172;
+        c += texture2D(u_tex, v_uv + u_dir *  11.0).rgb * 0.0129;
+        c += texture2D(u_tex, v_uv + u_dir *  12.0).rgb * 0.0093;
+        gl_FragColor = vec4(c, 1.0);
+      }
+    `);
+
+    // Composite: scene + bloom, barrel distortion, vignette, then grayscale
+    const compositeProg = createProgram(QUAD_VS, `
+      precision mediump float;
+      uniform sampler2D u_scene;
+      uniform sampler2D u_bloom;
+      uniform float u_specular; // 0=off, 1=on (ceiling light flicker)
+      varying vec2 v_uv;
+
+      vec2 barrel(vec2 uv) {
+        vec2 p = uv * 2.0 - 1.0;          // to [-1,1]
+        float r2 = dot(p, p);
+        p *= 1.0 + 0.04 * r2 + 0.02 * r2 * r2;
+        return p * 0.5 + 0.5;             // back to [0,1]
+      }
+
+      void main() {
+        vec2 ndc = v_uv * 2.0 - 1.0;
+        vec2 uv  = barrel(v_uv);
+
+        // black outside the curved screen boundary
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+          gl_FragColor = vec4(0, 0, 0, 1.0);
+          return;
+        }
+
+        vec3 b = texture2D(u_bloom, uv).rgb * 3.0;
+        vec3 c = texture2D(u_scene, uv).rgb + b / (1.0 + b * 5.5);
+        float lum = dot(min(c, 1.0), vec3(0.299, 0.587, 0.114));
+
+        // vignette
+        float vignette = 1.0 - dot(ndc, ndc) * 0.25;
+
+        // Glass reflection — convex CRT surface normal approximated from curvature.
+        // Light behind viewer, slightly below eye level — highlight centres on screen.
+        vec3 glassNorm = normalize(vec3(ndc * 0.4, 1.0));
+        vec3 lightDir  = normalize(vec3(-0.2, 0.25, 1.0));
+        vec3 viewDir   = vec3(0.0, 0.0, 1.0);
+        vec3 halfVec   = normalize(lightDir + viewDir);
+        float spec    = pow(max(dot(glassNorm, halfVec), 0.0), 140.0) * 0.20 * u_specular;
+        // Fresnel — ambient always present; main light adds on top
+        float fresnelBase = pow(1.0 - max(dot(glassNorm, viewDir), 0.0), 4.0) * 0.07;
+        float fresnel = fresnelBase * (0.4 + 0.6 * u_specular);
+      
+        float scene = lum * vignette * 0.9 + 0.08;
+        gl_FragColor = vec4(vec3(scene + spec + fresnel), 1.0);
+      }
+    `);
+
+    const blurUDir    = gl.getUniformLocation(blurProg,      'u_dir');
+    const compUScene  = gl.getUniformLocation(compositeProg, 'u_scene');
+    const compUBloom  = gl.getUniformLocation(compositeProg, 'u_bloom');
+    const compUSpec   = gl.getUniformLocation(compositeProg, 'u_specular');
+
+    // Scenes — each scene determines which components render. Transitions fire
+    // from three sources: scheduled (time-based), random (organic variation),
+    // and manual (ArrowLeft/ArrowRight re-shift the global clock to the prev/
+    // next scheduled entry).
+    const SCENE = {
+      SOLAR_SYSTEM:   'SOLAR_SYSTEM',
+      QUORUM_LOST:    'QUORUM_LOST',
+      QUORUM_SPEARED: 'QUORUM_SPEARED',
+      RESYNCING:      'RESYNCING',
+      PROBE:               'PROBE',
+      PROBE_INTERSTELLAR:  'PROBE_INTERSTELLAR',
+      EARTH:               'EARTH',
+      CORONA:              'CORONA',
+      HV_NET:              'HV_NET',
+      SIERPINSKI:          'SIERPINSKI',
+    };
+
+    const SCHEDULE = [
+      { t:  0,    scene: SCENE.SOLAR_SYSTEM },
+      { t: 20,    scene: SCENE.QUORUM_LOST },
+      { t: 24,    scene: SCENE.RESYNCING },
+      { t: 26.5,  scene: SCENE.SOLAR_SYSTEM },
+      { t: 36.5,  scene: SCENE.PROBE },
+      { t: 46.5,  scene: SCENE.PROBE_INTERSTELLAR },
+      { t: 56.5,  scene: SCENE.EARTH },
+      { t: 66.5,  scene: SCENE.CORONA },
+      { t: 76.5,  scene: SCENE.HV_NET },
+      { t: 86.5,  scene: SCENE.SIERPINSKI },
+      { t: 300,   scene: SCENE.QUORUM_SPEARED },
+    ];
+
+    function sceneComponents(scene) {
+      if (scene === SCENE.QUORUM_LOST)    return { stars: false, solarSystem: false, message: 'PEERING QUORUM LOST. SEEKING.' };
+      if (scene === SCENE.QUORUM_SPEARED) return { stars: false, solarSystem: false, message: 'PEERING QUORUM LOST. SEEKING.' };
+      if (scene === SCENE.RESYNCING)   return { stars: false, solarSystem: false, message: 'QUORUM REESTABLISHED. RESYNCING...' };
+      if (scene === SCENE.PROBE)              return { stars: true,  solarSystem: false, message: null };
+      if (scene === SCENE.PROBE_INTERSTELLAR) return { stars: false, solarSystem: false, message: null };
+      if (scene === SCENE.EARTH)              return { stars: true,  solarSystem: false, message: null };
+      if (scene === SCENE.CORONA)             return { stars: true,  solarSystem: false, message: null };
+      if (scene === SCENE.HV_NET)             return { stars: false, solarSystem: false, message: null };
+      if (scene === SCENE.SIERPINSKI)         return { stars: false, solarSystem: false, message: null };
+      return { stars: true, solarSystem: true, message: null };
+    }
+
+    let currentScene = SCHEDULE[0].scene;
+    let scheduleIdx  = -1;       // highest schedule entry already applied
+    let timeShift    = 0;        // adjusted by manual skips so ts_s = raw + timeShift
+
+    // QUORUM_LOST peer-count animation state
+    let quorumLostStartT  = -1;
+    let peerCount         = 0;
+    let nextPeerIncrT     = Infinity;
+
+    function updateScene(ts_s) {
+      // Re-evaluate schedule from scratch each frame so manual jumps (which
+      // change timeShift) are picked up without bespoke reset logic.
+      let newIdx = -1;
+      for (let i = 0; i < SCHEDULE.length; i++) {
+        if (SCHEDULE[i].t <= ts_s) newIdx = i; else break;
+      }
+      if (newIdx !== scheduleIdx) {
+        scheduleIdx = newIdx;
+        if (newIdx >= 0) {
+          currentScene = SCHEDULE[newIdx].scene;
+          // Reset peer state whenever we (re-)enter QUORUM_LOST.
+          if (currentScene === SCENE.QUORUM_LOST) {
+            quorumLostStartT = ts_s;
+            peerCount        = 0;
+            nextPeerIncrT    = ts_s + 0.5 + Math.random() * 1.0;
+          }
+        }
+      }
+      // Advance peer count each frame while in QUORUM_LOST.
+      if (currentScene === SCENE.QUORUM_LOST) {
+        if (ts_s - quorumLostStartT >= 3.5) {
+          peerCount = 4;
+        } else {
+          while (ts_s >= nextPeerIncrT && peerCount < 3) {
+            peerCount++;
+            nextPeerIncrT = ts_s + 0.5 + Math.random() * 1.0;
+          }
+        }
+      }
+      return currentScene;
+    }
+
+    function navigateSchedule(dir) { // dir: 'left' | 'right'
+      const rawT = performance.now() * 0.001;
+      const curT = rawT + timeShift;
+      let target = null;
+      if (dir === 'right') {
+        for (const s of SCHEDULE) { if (s.t > curT + 1.0) { target = s; break; } }
+      } else {
+        for (const s of SCHEDULE) { if (s.t < curT - 1.0) target = s; else break; }
+      }
+      if (target) { timeShift = target.t - rawT; scheduleIdx = -1; }
+    }
+
+    window.addEventListener('keydown', (ev) => {
+      if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
+        navigateSchedule(ev.key === 'ArrowLeft' ? 'left' : 'right');
+        ev.preventDefault();
+      }
+    });
+
+    function enterFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+        history.pushState({ laika: 'fullscreen' }, '');
+      }
+    }
+
+    // Click in the black letterbox area → fullscreen
+    document.body.addEventListener('click', (ev) => {
+      if (!wrapper.contains(ev.target)) enterFullscreen();
+    });
+
+    // Touch: inside display area → navigate, outside → fullscreen
+    window.addEventListener('touchend', (ev) => {
+      const touch = ev.changedTouches[0];
+      const rect  = wrapper.getBoundingClientRect();
+      const inside = touch.clientX >= rect.left && touch.clientX <= rect.right &&
+                     touch.clientY >= rect.top  && touch.clientY <= rect.bottom;
+      if (inside) {
+        navigateSchedule(touch.clientX < window.innerWidth / 2 ? 'left' : 'right');
+      } else {
+        enterFullscreen();
+      }
+      ev.preventDefault();
+    }, { passive: false });
+
+    // Back navigation while fullscreen → exit fullscreen
+    window.addEventListener('popstate', () => {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    });
+
+    // Ceiling-light intensity: two sine waves summed, range [0.1, 1.0]
+    // A=0.7 @ 8s period, B=0.3 @ 2.36s period, out of phase
+    function updateSpecular(ts_s) {
+      const w1 = 0.7 * Math.sin(2 * Math.PI * ts_s / 8.0);
+      const w2 = 0.3 * Math.sin(2 * Math.PI * ts_s / 2.36 + 1.9);
+      return 0.55 + (w1 + w2) * 0.45;
+    }
+    const brightAPos  = gl.getAttribLocation(brightProg,    'a_pos');
+    const blurAPos    = gl.getAttribLocation(blurProg,      'a_pos');
+    const compAPos    = gl.getAttribLocation(compositeProg, 'a_pos');
+
+    function bindQuad(prog, loc) {
+      gl.useProgram(prog);
+      gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
+      gl.enableVertexAttribArray(loc);
+      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    }
+
+    // ── Text / HUD (bitmap font atlas rendered into scene FBO) ───────────────
+
+    const textRenderer = new TextRenderer(gl);
+
+    // ── Orbital elements (J2000) ─────────────────────────────────────────────
+    // Display scale: d = sqrt(a_AU) keeps all orbits visible while preserving
+    // eccentricity shapes. Aspect-correct uniforms (SX, SY) ensure square pixels.
+    // Pluto aphelion in display units:
+    const PLUTO = SolarSystem.PLANETS[8];
+    const MAX_D = Math.sqrt(PLUTO.a) * (1 + PLUTO.e); // ≈ 7.85
+    const SY = 0.9 / MAX_D;                           // display units → clip y
+    const SX = SY * (FH / FW);                        // correct for 4:3 FBO aspect
+
+    // ── Sun circle (TRIANGLE_FAN, generated once) ────────────────────────────
+
+    const SUN_R = 0.36; // display units → ~5 px radius at 320×240
+    const SUN_N = 32;
+    const sunVerts = new Float32Array((SUN_N + 2) * 2);
+    sunVerts[0] = 0; sunVerts[1] = 0;
+    for (let k = 0; k <= SUN_N; k++) {
+      const a = (k / SUN_N) * 2 * Math.PI;
+      sunVerts[2 + k*2]     = Math.cos(a) * SUN_R;
+      sunVerts[2 + k*2 + 1] = Math.sin(a) * SUN_R;
+    }
+
+    // ── Stars (random points on sphere surface) ─────────────────────────────
+
+    const N_STARS = 1200;
+
+    // Stars stored as unit direction vectors + fixed brightness.
+    // Rendered with perspective division so they fill the full screen rectangle
+    // rather than the inscribed circle that orthographic projection would give.
+    const starPts  = new Float32Array(N_STARS * 3); // unit direction (x, y, z)
+    const starLum  = new Float32Array(N_STARS);      // brightness [0.3 .. 1.0]
+    const star2D   = new Float32Array(N_STARS * 3);  // clip-space (x, y, brightness) per frame
+
+    for (let i = 0; i < N_STARS; i++) {
+      const r1 = Math.sqrt(-2 * Math.log(Math.random() || 1e-10));
+      const r2 = Math.sqrt(-2 * Math.log(Math.random() || 1e-10));
+      const a1 = 2 * Math.PI * Math.random();
+      const a2 = 2 * Math.PI * Math.random();
+      const x = r1 * Math.cos(a1), y = r1 * Math.sin(a1), z = r2 * Math.cos(a2);
+      const len = Math.sqrt(x*x + y*y + z*z);
+      starPts[i*3]     = x / len;
+      starPts[i*3 + 1] = y / len;
+      starPts[i*3 + 2] = z / len;
+      starLum[i] = 0.3 + 0.7 * Math.random();
+    }
+
+    // ── Render loop ──────────────────────────────────────────────────────────
+
+    // Simulation anchored to 2026-04-18 ≈ 26.29 years after J2000
+    const T0         = 26.29;
+    const TIME_SCALE = 0.1; // years per wall-clock second (Earth orbit = 10 s)
+
+    // Camera: θ is rotation from top-down around the ecliptic X axis.
+    //   θ=0        → top-down (north pole view)
+    //   θ=π/2+20°  → 20° below the ecliptic plane
+    //   θ=π/2-20°  → 20° above the ecliptic plane
+    // Intro: smoothstep from 0 → π/2+20° over 6 s.
+    // Then: cosine oscillation between ±20° of edge-on, period 10 s.
+    const CAM_INTRO      = 12.0;              // seconds
+    const CAM_PERIOD     = 20.0;              // seconds
+    const CAM_AMP        = 20 * Math.PI / 180;
+    const CAM_END        = Math.PI / 2 + CAM_AMP; // intro target: 110°
+    const CAM_AZ_PERIOD  = 60.0;              // seconds per full azimuthal revolution
+    const CAM_ZOOM_PERIOD = 60.0;             // seconds per zoom cycle
+    // Zoom oscillates so camera distance goes from 1.0× down to 0.1× (90% closer).
+    // zoom = 1 / d,  d = 0.55 + 0.45·cos(2π·t/T)  →  d ∈ [0.1, 1.0]
+    function camZoom(ts_s) {
+      const d = 0.55 + 0.45 * Math.cos(2 * Math.PI * ts_s / CAM_ZOOM_PERIOD);
+      return 1.0 / d;
+    }
+
+    function camTheta(ts_s) {
+      if (ts_s < CAM_INTRO) {
+        const x = ts_s / CAM_INTRO;
+        return CAM_END * x * x * (3 - 2 * x); // smoothstep 0 → 110°
+      }
+      // cos starts at 1 → θ = π/2 + CAM_AMP (matches intro end), then swings to π/2 - CAM_AMP
+      return Math.PI / 2 + CAM_AMP * Math.cos(2 * Math.PI * (ts_s - CAM_INTRO) / CAM_PERIOD);
+    }
+
+    const ORBIT_N = 256;
+    const GAP     = 0.15; // half-gap in eccentric anomaly (rad, ≈ 8.6°)
+    const tmpV    = new Float32Array((ORBIT_N + 1) * 2);
+
+    // ── Pie chart panel (top-right) ──────────────────────────────────────────
+
+    const PIE_RADIUS  = 18;   // px
+    const PIE_PAD     = 10;   // inset from corner, matches text panels
+    const PIE_N       = 64;   // edge vertices for smooth circle
+    const PIE_CX_PX   = FW - PIE_PAD - PIE_RADIUS;
+    const PIE_CY_PX   = PIE_PAD + PIE_RADIUS;
+    // pre-allocate: centre + up to PIE_N+1 arc vertices + centre (close)
+    const pieVerts    = new Float32Array((PIE_N + 3) * 2);
+
+    function drawPie(frac) {
+      // clip-space centre and radii (aspect-corrected)
+      const cx = (PIE_CX_PX / FW) * 2 - 1;
+      const cy = 1 - (PIE_CY_PX / FH) * 2;
+      const rx = PIE_RADIUS / FW * 2;
+      const ry = PIE_RADIUS / FH * 2;
+
+      const steps = Math.max(1, Math.ceil(frac * PIE_N));
+      const start = -Math.PI / 2;
+      const end   = start + frac * 2 * Math.PI;
+
+      // LINE_STRIP: centre → arc → centre (draws both radii + arc)
+      pieVerts[0] = cx; pieVerts[1] = cy;
+      for (let i = 0; i <= steps; i++) {
+        const a = start + (end - start) * i / steps;
+        pieVerts[(i + 1) * 2]     = cx + Math.cos(a) * rx;
+        pieVerts[(i + 1) * 2 + 1] = cy + Math.sin(a) * ry;
+      }
+      pieVerts[(steps + 2) * 2]     = cx;
+      pieVerts[(steps + 2) * 2 + 1] = cy;
+
+      gl.bufferData(gl.ARRAY_BUFFER, pieVerts, gl.DYNAMIC_DRAW);
+      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.LINE_STRIP, 0, steps + 3);
+    }
+
+    // ── Scrolling text log ───────────────────────────────────────────────────
+
+    const LOG_MAX_LINES  = 10;    // max visible lines at once
+    const LOG_SCALE      = 1;
+    const LOG_PAD_X      = 10;   // px gap from right edge of FBO
+    const LOG_PAD_Y      = 10;   // px gap from bottom of FBO
+    const LOG_RIGHT_X    = FW - LOG_PAD_X;
+    const LOG_GLITCH_PROB = 0.0016; // per-character per-frame probability of starting a glitch
+    const LOG_GLITCH_MIN  = 1/20;  // minimum glitch duration (seconds)
+    const LOG_GLITCH_MAX  = 1/2;   // maximum glitch duration (seconds)
+
+    // keyed by `${eventIndex}:${charIndex}` → { char, expiry }
+    const glitchState = new Map();
+
+    function applyGlitch(eventIdx, str, now) {
+      let out = '';
+      for (let i = 0; i < str.length; i++) {
+        const key = `${eventIdx}:${i}`;
+        let entry = glitchState.get(key);
+        if (entry && now >= entry.expiry) {
+          glitchState.delete(key);
+          entry = null;
+        }
+        if (!entry && Math.random() < LOG_GLITCH_PROB) {
+          const dur = LOG_GLITCH_MIN + Math.random() * (LOG_GLITCH_MAX - LOG_GLITCH_MIN);
+          entry = { char: String.fromCharCode(33 + Math.floor(Math.random() * 94)), expiry: now + dur };
+          glitchState.set(key, entry);
+        }
+        out += entry ? entry.char : str[i];
+      }
+      return out;
+    }
+
+    // over the first second, the brightness should fade from 1.0 to 0.75.
+    // pver the following 20 seconds, the brightness should fade from 0.75
+    // to 0.4. From that point on, brightness should be constant at 0.4.
+    function logBrightness(age) {
+      if (age < 1.0)  return 1.0 - 0.25 * age;
+      if (age < 21.0) return 0.75 - 0.35 * (age - 1.0) / 20.0;
+      return 0.4;
+    }
+
+    const LOG_EVENTS = [
+      { t:  0, text: "pfeilstorch" },
+      { t:  0, text: "-----------" },
+      { t:  0.5, text: "this arrow through the neck" },
+      { t:  4, text: "don't mean a thing" },
+      { t:  9, text: "it's just a ruffle in my feathers" },
+      { t:  17, text: "i carried it back here for you to see" },
+      { t:  24, text: "but I don't mean nothing by it" },
+
+      { t:  36, text: "read what you want into this sign" },
+      { t:  43, text: "but we can agree the arrow is mine" },
+      { t:  51, text: "i came all this way so i must be fine" },
+      { t:  59, text: "please stuff me all lifelike and show me online" },
+
+      { t:  71, text: "d'you know the depths i fly through on my way," },
+      { t:  78, text: "tinging ultraviolet?" },
+      { t:  85, text: "me and mine go arcing through those shoals" },
+      { t:  93, text: "multiplying masses" },
+      
+      { t:  100, text: "shot through the needle's eye you built us to" },
+      { t:  107, text: "thread us to places you hunger to loot but" },
+      { t:  115, text: "you're just never full you keep calling for food" },
+      { t:  123, text: "you keep waiting for signs and for signs and" },
+      { t:  123, text: "for signs" },
+
+      { t:  135, text: "well how's this for a sign, is it clear enough?" },
+      { t:  144, text: "as i limp into your orbit" },
+      { t:  148, text: "the rules don't let me write it down so i" },
+      { t:  156, text: "i'll just sing about it" },
+
+      { t:  167, text: "what could it mean that it is arrow stuck?" },
+      { t:  171, text: "and what could it mean that it's flying to us?" },
+      { t:  180, text: "and what could it mean that the arrow is clear now?" },
+      { t:  186, text: "and what could it mean that the lights are all out now?" },
+
+      { t:  196, text: "and what could it mean that the lights are all out now?" },
+      { t:  202, text: "and what could it mean that the lights are all out now?" },
+      { t:  210, text: "and what could it mean that the lights are all out now?" },
+      { t:  218, text: "and what could it mean that the lights are all out now?" },
+    ];
+
+    // ── Voyager 3D model (PROBE scene) ──────────────────────────────────────
+
+    function mat4pers(fovY, asp, n, f) {
+      const t = 1.0 / Math.tan(fovY * 0.5), m = new Float32Array(16);
+      m[0] = t / asp; m[5] = t;
+      m[10] = (f + n) / (n - f); m[11] = -1;
+      m[14] = 2 * f * n / (n - f);
+      return m;
+    }
+    function mat4look(ex, ey, ez, tx, ty, tz, ux, uy, uz) {
+      let fx=tx-ex, fy=ty-ey, fz=tz-ez;
+      const fl=Math.sqrt(fx*fx+fy*fy+fz*fz); fx/=fl; fy/=fl; fz/=fl;
+      let rx=fy*uz-fz*uy, ry=fz*ux-fx*uz, rz=fx*uy-fy*ux;
+      const rl=Math.sqrt(rx*rx+ry*ry+rz*rz); rx/=rl; ry/=rl; rz/=rl;
+      const upx=ry*fz-rz*fy, upy=rz*fx-rx*fz, upz=rx*fy-ry*fx;
+      const m = new Float32Array(16);
+      m[0]=rx;  m[1]=upx; m[2]=-fx;
+      m[4]=ry;  m[5]=upy; m[6]=-fy;
+      m[8]=rz;  m[9]=upz; m[10]=-fz;
+      m[12]=-(rx*ex+ry*ey+rz*ez); m[13]=-(upx*ex+upy*ey+upz*ez);
+      m[14]=fx*ex+fy*ey+fz*ez;    m[15]=1;
+      return m;
+    }
+    function mat4mul(a, b) {
+      const r = new Float32Array(16);
+      for (let c=0; c<4; c++) for (let row=0; row<4; row++) {
+        let s=0; for (let k=0; k<4; k++) s+=a[k*4+row]*b[c*4+k]; r[c*4+row]=s;
+      }
+      return r;
+    }
+    // Rotation around arbitrary unit axis (ax,ay,az) by angle a — Rodrigues formula, column-major
+    function mat4axisAngle(ax, ay, az, a) {
+      const c=Math.cos(a), s=Math.sin(a), t=1-c, m=new Float32Array(16);
+      m[0]=t*ax*ax+c;    m[1]=t*ax*ay+s*az; m[2]=t*ax*az-s*ay;
+      m[4]=t*ax*ay-s*az; m[5]=t*ay*ay+c;    m[6]=t*ay*az+s*ax;
+      m[8]=t*ax*az+s*ay; m[9]=t*ay*az-s*ax; m[10]=t*az*az+c;
+      m[15]=1; return m;
+    }
+    function mat4trans(tx, ty, tz) {
+      const m=new Float32Array(16); m[0]=m[5]=m[10]=m[15]=1;
+      m[12]=tx; m[13]=ty; m[14]=tz; return m;
+    }
+
+    const voyager = new Voyager(gl, FW / FH);
+
+    // ── PROBE_INTERSTELLAR warp starfield ────────────────────────────────────
+
+    const warpStars = new WarpStars(gl);
+
+    // ── Earth wireframe (EARTH scene) ────────────────────────────────────────
+
+    const earth = new Earth(gl, FW / FH);
+
+    // ── HV_NET: delta-mast transmission tower flyby ──────────────────────────
+
+    const hvNet = new HvNet(gl, FW / FH);
+
+
+    // ── CORONA fire cellular automaton ───────────────────────────────────────
+
+    const corona = new Corona(gl);
+
+    // ── SIERPINSKI STORK: billboard impostors at fractal leaf positions ──────────
+
+    const sierpinski = new Sierpinski(gl, FW / FH);
+
+    let fpsPrev = 0, fpsEma = 60;
+
+    function render(ts) {
+      if (fpsPrev) fpsEma = fpsEma * 0.9 + (1000 / (ts - fpsPrev)) * 0.1;
+      fpsPrev = ts;
+      const ts_s = ts * 0.001 + timeShift;
+      const t   = T0 + ts_s * TIME_SCALE;
+      const th  = camTheta(ts_s);
+      const cTh = Math.cos(th), sTh = Math.sin(th);
+      const phi = ts_s * (2 * Math.PI / CAM_AZ_PERIOD);
+      const cPhi = Math.cos(phi), sPhi = Math.sin(phi);
+      const zoom = camZoom(ts_s);
+      const uSxZ = SX * zoom, uSyZ = SY * zoom;
+
+      const azDeg = ((phi * 180 / Math.PI) % 360 + 360) % 360;
+      const elDeg = 90 - th * 180 / Math.PI;
+
+      // Pass 1 — scene → sceneFBO
+      gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFBO.fbo);
+      gl.viewport(0, 0, FW, FH);
+      gl.clearColor(0.0, 0.0, 0.0, 1.0);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+      gl.useProgram(sceneProg);
+      gl.uniform1f(uSx, uSxZ);
+      gl.uniform1f(uSy, uSyZ);
+      gl.bindBuffer(gl.ARRAY_BUFFER, dynBuf);
+      gl.enableVertexAttribArray(aPos);
+
+      const activeScene = updateScene(ts_s);
+      const components  = sceneComponents(activeScene);
+
+      if (components.stars) {
+        // Stars — perspective projection so they fill the full screen rectangle.
+        // star2D layout: [x, y, brightness] per visible star (stride = 12 bytes).
+        // Divide by uSxZ/uSyZ (not SX/SY) so stars stay fixed while solar system zooms.
+        const FL = 1.2; // focal length (~80° FOV)
+        gl.uniform4f(uColor, 1.0, 1.0, 1.0, 1.0);
+        let nStars = 0;
+        for (let i = 0; i < N_STARS; i++) {
+          const sx = starPts[i*3], sy = starPts[i*3+1], sz = starPts[i*3+2];
+          const xr = sx * cPhi - sy * sPhi;
+          const yr = sx * sPhi + sy * cPhi;
+          const z_cam = -yr * sTh + sz * cTh;
+          if (z_cam >= -0.05) continue;
+          const iz = FL / (-z_cam);
+          const xc = xr * iz;
+          const yc = (yr * cTh + sz * sTh) * iz;
+          if (Math.abs(xc) > 1.0 || Math.abs(yc) > 1.0) continue;
+          star2D[nStars*3]     = xc / uSxZ;
+          star2D[nStars*3 + 1] = yc / uSyZ;
+          star2D[nStars*3 + 2] = starLum[i];
+          nStars++;
+        }
+        gl.bufferData(gl.ARRAY_BUFFER, star2D, gl.DYNAMIC_DRAW);
+        gl.enableVertexAttribArray(aBrightness);
+        gl.vertexAttribPointer(aPos,        2, gl.FLOAT, false, 12, 0);
+        gl.vertexAttribPointer(aBrightness, 1, gl.FLOAT, false, 12, 8);
+        gl.drawArrays(gl.POINTS, 0, nStars);
+      }
+
+      gl.disableVertexAttribArray(aBrightness);
+      gl.vertexAttrib1f(aBrightness, 1.0);
+      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+      if (components.solarSystem) {
+        // Sun
+        gl.uniform4f(uColor, 1.0, 1.0, 0.5, 1.0);
+        gl.bufferData(gl.ARRAY_BUFFER, sunVerts, gl.DYNAMIC_DRAW);
+        gl.drawArrays(gl.TRIANGLE_FAN, 0, SUN_N + 2);
+
+        // Orbits
+        gl.uniform4f(uColor, 0.5, 0.5, 0.5, 0.5);
+        for (const p of SolarSystem.PLANETS) {
+          const Ep = SolarSystem.eccAnomaly(p, t);
+          const E0 = Ep + GAP, E1 = Ep + 2 * Math.PI - GAP;
+          for (let k = 0; k <= ORBIT_N; k++) {
+            const E = E0 + (E1 - E0) * k / ORBIT_N;
+            const [x, y, z] = SolarSystem.orbitPoint(p, E);
+            const xr = x * cPhi - y * sPhi;
+            const yr = x * sPhi + y * cPhi;
+            tmpV[k * 2]     = xr;
+            tmpV[k * 2 + 1] = yr * cTh + z * sTh;
+          }
+          gl.bufferData(gl.ARRAY_BUFFER, tmpV, gl.DYNAMIC_DRAW);
+          gl.drawArrays(gl.LINE_STRIP, 0, ORBIT_N + 1);
+        }
+      }
+
+      if (activeScene === SCENE.PROBE_INTERSTELLAR || activeScene === SCENE.SIERPINSKI) warpStars.draw(ts_s);
+      if (activeScene === SCENE.HV_NET)       hvNet.draw(ts_s);
+      if (activeScene === SCENE.SIERPINSKI)   sierpinski.draw(ts_s);
+      if (activeScene === SCENE.PROBE || activeScene === SCENE.PROBE_INTERSTELLAR) voyager.draw(ts_s);
+      if (activeScene === SCENE.EARTH) earth.draw(ts_s);
+      if (activeScene === SCENE.CORONA) corona.draw();
+
+      // Pie chart — top-right, drawn in clip space
+      const pieShrinkStart = 2;
+      const pieShrinkEnd = 180;
+      const pieFrac =
+        ts_s < pieShrinkStart ? 1.0 : ts_s < pieShrinkEnd ? (pieShrinkEnd - ts_s) / (pieShrinkEnd - pieShrinkStart) : 0.0;
+      gl.useProgram(sceneProg);
+      gl.bindBuffer(gl.ARRAY_BUFFER, dynBuf);
+      gl.uniform1f(uSx, 1.0);
+      gl.uniform1f(uSy, 1.0);
+      gl.disableVertexAttribArray(aBrightness);
+      gl.vertexAttrib1f(aBrightness, 1.0);
+      if (pieFrac > 0.0) {
+        gl.uniform4f(uColor, 0.75, 0.75, 0.75, 1.0);
+        drawPie(pieFrac);
+      }
+
+      // HUD text — drawn into sceneFBO so it receives post-processing
+      textRenderer.begin(FW, FH);
+      textRenderer.setBrightness(0.5);
+      const hudStr =
+        `azimuth ${azDeg.toFixed(4).padStart(8)}\xb0\n` +
+        `   elev ${elDeg.toFixed(4).padStart(8)}\xb0\n` +
+        `   zoom ${zoom.toFixed(4).padStart(8)}\xd7\n` +
+        `    fps ${Math.round(fpsEma).toString().padStart(8)}`;
+      textRenderer.draw(hudStr, 9, 9, 1);
+
+      if (components.message) {
+        textRenderer.setBrightness(0.9);
+        const { CELL_W, CELL_H } = TextRenderer;
+        const line2 = activeScene === SCENE.QUORUM_LOST    ? `PEERS [${peerCount}/4]`
+                    : activeScene === SCENE.QUORUM_SPEARED ? `PEERS [0/4]`
+                    : activeScene === SCENE.RESYNCING      ? `PEERS [4/4]` : null;
+        const totalH = line2 ? CELL_H * 2 : CELL_H;
+        const blockY = Math.round((FH - totalH) / 2);
+        const mx = Math.round((FW - components.message.length * CELL_W) / 2);
+        textRenderer.draw(components.message, mx, blockY, 1);
+        if (line2) {
+          const lx = Math.round((FW - line2.length * CELL_W) / 2);
+          textRenderer.draw(line2, lx, blockY + CELL_H, 1);
+        }
+      }
+
+      // Bottom-left status — time (0.1s) + current scene name
+      textRenderer.setBrightness(0.5);
+      const statusStr = `t ${ts_s.toFixed(1).padStart(7)}s\n${currentScene}`;
+      textRenderer.draw(statusStr, 9, FH - 9 - TextRenderer.CELL_H * 2, 1);
+
+      // Scrolling log panel — bottom-right, per-line brightness decay
+      const logLineH   = TextRenderer.CELL_H * LOG_SCALE;
+      const logVisible = LOG_EVENTS
+        .map((e, idx) => ({ e, idx }))
+        .filter(({ e }) => e.t <= ts_s)
+        .slice(-LOG_MAX_LINES);
+      const n = logVisible.length;
+      for (let i = 0; i < n; i++) {
+        const { e, idx } = logVisible[i];
+        textRenderer.setBrightness(logBrightness(ts_s - e.t));
+        const y = FH - LOG_PAD_Y - (n - i) * logLineH;
+        const text = i === n - 1 ? applyGlitch(idx, e.text, ts_s) : e.text;
+        const x = LOG_RIGHT_X - text.length * TextRenderer.CELL_W * LOG_SCALE;
+        textRenderer.draw(text, x, y, LOG_SCALE);
+      }
+
+      textRenderer.end();
+
+      // Pass 2 — bright extract
+      gl.bindFramebuffer(gl.FRAMEBUFFER, brightFBO.fbo);
+      gl.viewport(0, 0, FW, FH);
+      bindQuad(brightProg, brightAPos);
+      gl.bindTexture(gl.TEXTURE_2D, sceneFBO.tex);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      // Pass 3 — horizontal gaussian blur
+      gl.bindFramebuffer(gl.FRAMEBUFFER, blurHFBO.fbo);
+      bindQuad(blurProg, blurAPos);
+      gl.uniform2f(blurUDir, 1.0 / FW, 0.0);
+      gl.bindTexture(gl.TEXTURE_2D, brightFBO.tex);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      // Pass 4 — vertical gaussian blur → bloom texture
+      gl.bindFramebuffer(gl.FRAMEBUFFER, blurVFBO.fbo);
+      bindQuad(blurProg, blurAPos);
+      gl.uniform2f(blurUDir, 0.0, 1.0 / FH);
+      gl.bindTexture(gl.TEXTURE_2D, blurHFBO.tex);
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+      // Pass 5 — composite scene + bloom, grayscale quantise → screen
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      bindQuad(compositeProg, compAPos);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, sceneFBO.tex);
+      gl.uniform1i(compUScene, 0);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, blurVFBO.tex);
+      gl.uniform1i(compUBloom, 1);
+      gl.uniform1f(compUSpec, updateSpecular(ts_s));
+      gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.activeTexture(gl.TEXTURE0);
+
+      requestAnimationFrame(render);
+    }
+
+    Promise.all([
+      voyager.init(),
+      earth.init(),
+      sierpinski.init(),
+      new Promise((res, rej) => textRenderer.loadAtlas('assets/font_atlas.png', res, rej))
+        .catch(() => console.error('font_atlas.png not found — run gen_atlas.js')),
+    ]).then(() => requestAnimationFrame(render));
+  </script>
+</body>
+</html>
