@@ -2,7 +2,7 @@ class Grass {
   static N_ROWS        = 100;
   static N_COLS        = 100;
   static N_LEVELS      = 5;
-  static N_SPARKS      = 200;
+  static N_SPARKS      = 400;
   static METEOR_T0     = 4.0;          // seconds into scene before meteor appears
   static METEOR_VX     = 0.5 / 3;      // clip/s
   static METEOR_START_X = -1.1;
@@ -135,14 +135,17 @@ class Grass {
   _spawnSparks(x, y) {
     const n = Grass.N_SPARKS;
     this._sparks = new Array(n);
+    // Ring oriented upright in 3D, ~22.5° from edge-on.
+    // cos(67.5°) ≈ 0.383 foreshortens the horizontal axis.
+    const TILT = Math.cos(67.5 * Math.PI / 180);
     for (let i = 0; i < n; i++) {
-      const speed = (0.1 + 0.9 * Math.random()) / 8;
-      const angle = Math.random() * 2 * Math.PI;
+      const theta = (i / n) * 2 * Math.PI + (Math.random() - 0.5) * (2 * Math.PI / n);
+      const speed = (0.7 + 0.3 * Math.random()) / 8;
       this._sparks[i] = {
         x, y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        decay: (0.5 + 2.0 * Math.random()) * 1,
+        vx: Math.cos(theta) * TILT * speed,
+        vy: Math.sin(theta) * speed,
+        decay: 0.5 + 1.5 * Math.random(),
       };
     }
   }

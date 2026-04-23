@@ -4,6 +4,7 @@ class Earth {
     this.aspect = aspect;
     this._stripLengths = [];
     this._initProgram();
+    this._grid = new CrtGrid(gl);
     this._vbo = gl.createBuffer();
   }
 
@@ -35,6 +36,7 @@ class Earth {
 
   draw(ts_s) {
     const gl   = this.gl;
+    this._grid.draw();
     const TILT = 23.44 * Math.PI / 180;
     const R_spin = mat4axisAngle(0, 1, 0, ts_s * (2 * Math.PI / 120));
     const R_tilt = mat4axisAngle(0, 0, 1, -TILT);

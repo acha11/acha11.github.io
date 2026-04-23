@@ -10,6 +10,7 @@ class HvNet {
     this.t0     = t0;
     this._initPrograms();
     this._initGeometry();
+    this._grid = new CrtGrid(gl);
   }
 
   _initPrograms() {
@@ -122,6 +123,7 @@ class HvNet {
 
   draw(ts_s) {
     const gl = this.gl;
+    this._grid.draw();
     const { N, CAM_SPEED, SPACING, CLUTTER_N } = HvNet;
     const st     = Math.max(0, ts_s - this.t0);
     // Speed ramps linearly from 0 → CAM_SPEED over 5 s; integrate for position

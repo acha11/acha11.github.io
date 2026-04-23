@@ -21,6 +21,7 @@ class SolarSystem2 {
     this._SX = this._SY * (FH / FW);
     this._initOrbitProgram();
     this._initSunProgram();
+    this._grid = new CrtGrid(gl);
     this._initGeometry();
   }
 
@@ -118,9 +119,11 @@ class SolarSystem2 {
     const sx   = this._SX * zoom;
     const sy   = this._SY * zoom;
 
+    this._grid.draw();
+
     gl.enable(gl.DEPTH_TEST);
 
-    // Orbits first (3D, write depth) — orbit segments behind the sun will be
+    // Orbits (3D, write depth) — orbit segments behind the sun will be
     // occluded when the sun is drawn over them at depth 0.5.
     const mvp = this._buildMVP(cPhi, sPhi, cTh, sTh, sx, sy);
     gl.useProgram(this._orbitProg);

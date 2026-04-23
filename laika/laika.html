@@ -15,6 +15,7 @@
     }
     canvas { display: block; }
   </style>
+  <script src="js/crt_grid.js"></script>
   <script src="js/solar_system.js"></script>
   <script src="js/solar_system2.js"></script>
   <script src="js/corona.js"></script>
@@ -209,7 +210,8 @@
       uniform float u_time;
       uniform float u_ripple;   // ripple amplitude (0 = off)
       uniform vec2  u_ripple_ctr;
-      uniform float u_warp;    // corner squash strength [0,1]
+      uniform float u_warp;       // corner squash strength [0,1]
+      uniform float u_bloom_mult; // bloom intensity multiplier
       varying vec2 v_uv;
 
       vec2 barrel(vec2 uv) {
@@ -239,7 +241,7 @@
         vec2 contentUV    = glassUV + rippleDir * u_ripple * rippleSin * rippleDecay + warpOffset + u_shake;
         float lum = 0.0;
         if (contentUV.x >= 0.0 && contentUV.x <= 1.0 && contentUV.y >= 0.0 && contentUV.y <= 1.0) {
-          vec3 b = texture2D(u_bloom, contentUV).rgb * 3.0;
+          vec3 b = texture2D(u_bloom, contentUV).rgb * u_bloom_mult;
           vec3 c = texture2D(u_scene, contentUV).rgb + b / (1.0 + b * 5.5);
           lum = dot(min(c, 1.0), vec3(0.299, 0.587, 0.114));
         }
@@ -273,14 +275,15 @@
     const compUTime   = gl.getUniformLocation(compositeProg, 'u_time');
     const compURipple    = gl.getUniformLocation(compositeProg, 'u_ripple');
     const compURippleCtr = gl.getUniformLocation(compositeProg, 'u_ripple_ctr');
-    const compUWarp   = gl.getUniformLocation(compositeProg, 'u_warp');
+    const compUWarp      = gl.getUniformLocation(compositeProg, 'u_warp');
+    const compUBloomMult = gl.getUniformLocation(compositeProg, 'u_bloom_mult');
 
     // Scenes — each scene determines which components render. Transitions fire
     // from three sources: scheduled (time-based), random (organic variation),
     // and manual (ArrowLeft/ArrowRight re-shift the global clock to the prev/
     // next scheduled entry).
     const SCENE = {
-      SOLAR_SYSTEM2:   'SOLAR_SYSTEM2',
+      SOLAR_SYSTEM:    'SOLAR_SYSTEM',
       QUORUM_LOST:    'QUORUM_LOST',
       QUORUM_SPEARED: 'QUORUM_SPEARED',
       RESYNCING:      'RESYNCING',
@@ -296,27 +299,29 @@
     };
 
     const SCHEDULE = [
-      { t:  0,    scene: SCENE.SOLAR_SYSTEM2 },
+      { t:  0,    scene: SCENE.SOLAR_SYSTEM },
       { t:  1,    trigger: 'screenshake', params: { duration: 0.2 } },
       { t:  5,    trigger: 'screenshake', params: { duration: 0.7 } },
-      { t: 20,    scene: SCENE.QUORUM_LOST },
-      { t: 24,    scene: SCENE.RESYNCING },
-      { t: 26.5,  scene: SCENE.SOLAR_SYSTEM2 },
-      { t: 36.5,  scene: SCENE.PROBE },
-      { t: 46.5,  scene: SCENE.PROBE_INTERSTELLAR },
-      { t: 56.5,  scene: SCENE.EARTH },
-      { t: 66.5,  scene: SCENE.EARTH_SATELLITES },
-      { t: 81.5,  scene: SCENE.CORONA },
-      { t:  88.5,    trigger: 'warp', params: { duration: 1.5 } },
-      { t: 101.5, scene: SCENE.HV_NET },
-      { t: 111.5, scene: SCENE.SIERPINSKI },
+      { t: 16,    scene: SCENE.QUORUM_LOST },
+      { t: 18,    scene: SCENE.RESYNCING },
+      { t: 19,  scene: SCENE.SOLAR_SYSTEM },
+      { t: 34.5,  scene: SCENE.PROBE },
+      { t: 42,  scene: SCENE.EARTH },
+      // I came all this way
+      { t: 68.8,  scene: SCENE.PROBE_INTERSTELLAR },
+      { t: 84, scene: SCENE.SIERPINSKI },
+
+      { t: 100.5,  scene: SCENE.EARTH_SATELLITES },
+      { t: 115.5,  scene: SCENE.CORONA },
+      { t: 120.5,  trigger: 'warp', params: { duration: 1.5 } },
+      { t: 130.5, scene: SCENE.HV_NET },
       { t: 141.5, scene: SCENE.GRASS },
       { t: 171.5, scene: SCENE.DISASSEMBLY },
-      { t: 174.2, trigger: 'screenshake', params: { duration: 0.2 } },
-      { t: 178.7, trigger: 'screenshake', params: { duration: 0.4 } },
-      { t: 183.1, trigger: 'screenshake', params: { duration: 0.3 } },
-      { t: 191.5, trigger: 'screenshake', params: { duration: 0.5 } },
-      { t: 197.3, trigger: 'screenshake', params: { duration: 0.3 } },
+      { t: 174.2, trigger: 'screenshake', params: { duration: 0.2, intensity: 1.00 } },
+      { t: 178.7, trigger: 'screenshake', params: { duration: 0.4, intensity: 1.25 } },
+      { t: 183.1, trigger: 'screenshake', params: { duration: 0.3, intensity: 1.5625 } },
+      { t: 191.5, trigger: 'screenshake', params: { duration: 0.5, intensity: 1.953 } },
+      { t: 197.3, trigger: 'screenshake', params: { duration: 0.3, intensity: 2.441 } },
       { t: 300,   scene: SCENE.QUORUM_SPEARED },
     ];
 
@@ -333,7 +338,7 @@
       if (scene === SCENE.SIERPINSKI)         return { stars: false, message: null };
       if (scene === SCENE.GRASS)              return { stars: true,  message: null };
       if (scene === SCENE.DISASSEMBLY)        return { stars: false, message: null };
-      if (scene === SCENE.SOLAR_SYSTEM2)      return { stars: true,  message: null };
+      if (scene === SCENE.SOLAR_SYSTEM)      return { stars: true,  message: null };
       return { stars: true, message: null };
     }
 
@@ -421,6 +426,7 @@
           if (SCHEDULE[i].t <= target.t) tIdx = i; else break;
         }
         triggerFiredUpTo = tIdx;
+        syncAudio(target.t);
       }
     }
 
@@ -461,6 +467,29 @@
     window.addEventListener('popstate', () => {
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     });
+
+    // ── Audio ─────────────────────────────────────────────────────────────────
+    // schedule t=0 aligns to this offset into the MP3
+    const AUDIO_OFFSET = 60;
+    const audio = new Audio();
+    audio.addEventListener('error', () => console.warn('[A] audio error', audio.error?.code));
+
+    // Prefetch the whole file into a blob so seeks always succeed
+    fetch('mp3/raw.mp3')
+      .then(r => r.blob())
+      .then(blob => { audio.src = URL.createObjectURL(blob); })
+      .catch(e => console.warn('[A] fetch failed', e));
+
+    function syncAudio(ts_s) {
+      if (!audio.src) return;
+      const target = ts_s + AUDIO_OFFSET;
+      if (audio.paused) {
+        audio.currentTime = target;
+        audio.play().catch(() => {});
+      } else {
+        audio.currentTime = target;
+      }
+    }
 
     // Ceiling-light intensity: two sine waves summed, range [0.1, 1.0]
     // A=0.7 @ 8s period, B=0.3 @ 2.36s period, out of phase
@@ -714,7 +743,7 @@
     }
 
     const voyager      = new Voyager(gl, FW / FH);
-    const solarSystem2 = new SolarSystem2(gl, FW, FH);
+    const solarSystem = new SolarSystem2(gl, FW, FH);
 
     // ── PROBE_INTERSTELLAR warp starfield ────────────────────────────────────
 
@@ -742,12 +771,14 @@
     const disassembly   = new Disassembly(gl, FW, FH, disassemblyT0);
 
     let fpsPrev = 0, fpsEma = 60;
-    let shakeStartT  = -1e9;
+    let shakeStartT   = -1e9;
     let shakeDuration = 0.3;
+    let shakeIntensity = 1.0;
 
     function trigger_screenshake(params, ts_s) {
-      shakeStartT   = ts_s;
-      shakeDuration = params?.duration ?? 0.3;
+      shakeStartT    = ts_s;
+      shakeDuration  = params?.duration  ?? 0.3;
+      shakeIntensity = params?.intensity ?? shakeIntensity;
     }
 
     let warpStartT   = 1e9;
@@ -833,7 +864,7 @@
       if (activeScene === SCENE.HV_NET)       hvNet.draw(ts_s);
       if (activeScene === SCENE.SIERPINSKI)   sierpinski.draw(ts_s);
       if (activeScene === SCENE.PROBE || activeScene === SCENE.PROBE_INTERSTELLAR) voyager.draw(ts_s);
-      if (activeScene === SCENE.SOLAR_SYSTEM2) solarSystem2.draw(ts_s);
+      if (activeScene === SCENE.SOLAR_SYSTEM) solarSystem.draw(ts_s);
       if (activeScene === SCENE.EARTH) earth.draw(ts_s);
       if (activeScene === SCENE.EARTH_SATELLITES) earthSatellites.draw(ts_s);
       if (activeScene === SCENE.CORONA) corona.draw(ts_s);
@@ -941,7 +972,7 @@
       const shakeAge = ts_s - shakeStartT;
       let shakeX = 0, shakeY = 0;
       if (shakeAge < shakeDuration) {
-        const mag = 5 * (1 - shakeAge / shakeDuration);
+        const mag = 5 * shakeIntensity * (1 - shakeAge / shakeDuration);
         const angle = Math.random() * 2 * Math.PI;
         shakeX = Math.cos(angle) * mag;
         shakeY = Math.sin(angle) * mag;
@@ -952,10 +983,17 @@
       let disassemblyMult = 1;
       if (inDisassembly) {
         const age     = ts_s - disassemblyT0;
-        const rampIn  = Math.min(Math.max(age - 3, 0) / 10.0, 1.0);
-        const rampOut = age >= 20 ? Math.max(1.0 - (age - 20) / 6.0, 0.0) : 1.0;
+        const rampIn  = Math.min(Math.max(age - 10, 0) / 10.0, 1.0);
+        const rampOut = age < 20  ? 1.0
+                      : age < 26  ? Math.max(1.0 - (age - 20) / 6.0, 0.0)
+                      : age < 30  ? 0.0
+                      :             Math.min((age - 30) / 4.0, 1.0);
         disassemblyMult = (1 + 7 * rampIn) * rampOut;
       }
+      const bloomMult = inDisassembly
+        ? 3.0 * (1.0 + 3.0 * Math.min((ts_s - disassemblyT0) / 4.0, 1.0))
+        : 3.0;
+      gl.uniform1f(compUBloomMult, bloomMult);
       const rippleAmp = 0.015 * Math.min(ts_s / 60.0, 1.0) * disassemblyMult;
       gl.uniform1f(compURipple, rippleAmp);
       if (ts_s < rippleSegStartT) {

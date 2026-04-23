@@ -1,8 +1,9 @@
 class Disassembly {
-  static N_SLICES  = 32;
-  static N_LONG    = 12;
-  static ROT_SPEED    = 0.5;   // rad/s base rotation
-  static ELONGATE_AMP = 0.7;   // max Y spread at peak
+  static N_SLICES     = 32;
+  static N_LONG       = 12;
+  static ROT_SPEED    = 0.5;
+  static ELONGATE_AMP = 0.7;
+  static N_STARS      = 800;
 
   constructor(gl, FW, FH, t0) {
     this.gl     = gl;
@@ -12,8 +13,11 @@ class Disassembly {
     this.t0     = t0;
     this._initProgram();
     this._initCircleProgram();
+    this._initStarProgram();
     this._initGeometry();
     this._initSliceState();
+    this._initCamState();
+    this._grid = new CrtGrid(gl);
   }
 
   _initProgram() {
@@ -70,6 +74,43 @@ class Disassembly {
     this._circleQuad    = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this._circleQuad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  }
+
+  _initStarProgram() {
+    const gl = this.gl;
+    const { N_STARS } = Disassembly;
+    this._starProg = createProgram(`
+      attribute vec4 a_star; // xyz = direction, w = brightness
+      uniform mat4 u_mvp;
+      varying float v_b;
+      void main() {
+        v_b = a_star.w;
+        gl_PointSize = 1.0;
+        gl_Position = u_mvp * vec4(a_star.xyz, 1.0);
+      }
+    `, `
+      precision mediump float;
+      varying float v_b;
+      void main() { gl_FragColor = vec4(v_b, v_b, v_b, 1.0); }
+    `);
+    this._starUMVP = gl.getUniformLocation(this._starProg, 'u_mvp');
+    this._starAStar = gl.getAttribLocation(this._starProg, 'a_star');
+
+    // Generate random unit directions with brightness, placed at radius 100
+    const data = new Float32Array(N_STARS * 4);
+    for (let i = 0; i < N_STARS; i++) {
+      const u = Math.random() * 2 - 1;
+      const t = Math.random() * 2 * Math.PI;
+      const r = Math.sqrt(1 - u * u);
+      data[i*4]   = r * Math.cos(t) * 100;
+      data[i*4+1] = u * 100;
+      data[i*4+2] = r * Math.sin(t) * 100;
+      data[i*4+3] = 0.3 + 0.7 * Math.random();
+    }
+    this._starVbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._starVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
@@ -138,6 +179,38 @@ class Disassembly {
     }
   }
 
+  _initCamState() {
+    this._camPos      = [0, 0.3, 3.5];
+    this._camFrom     = [0, 0.3, 3.5];
+    this._camTo       = [0, 0.3, 3.5];
+    this._camLerpT    = -1;
+    this._nextCamMove = 20;
+  }
+
+  _randomCamPos(st) {
+    const r  = st >= 40 ? 3.3 : 3.5 + 6.5 * Math.random();
+    const az = (Math.random() - 0.5) * Math.PI;
+    const el = (Math.random() - 0.5) * (2 * Math.PI / 3); // ±60°
+    return [r * Math.cos(el) * Math.sin(az), r * Math.sin(el), r * Math.cos(el) * Math.cos(az)];
+  }
+
+  _updateCam(st) {
+    if (st < 20) return this._camPos;
+    if (st >= this._nextCamMove) {
+      this._camFrom     = [...this._camPos];
+      this._camTo       = this._randomCamPos(st);
+      this._camLerpT    = st;
+      this._nextCamMove = st + 0.2 + 0.3 + Math.random() * 1;
+    }
+    const p = Math.min((st - this._camLerpT) / 0.2, 1.0);
+    this._camPos = [
+      this._camFrom[0] + (this._camTo[0] - this._camFrom[0]) * p,
+      this._camFrom[1] + (this._camTo[1] - this._camFrom[1]) * p,
+      this._camFrom[2] + (this._camTo[2] - this._camFrom[2]) * p,
+    ];
+    return this._camPos;
+  }
+
   _initSliceState() {
     const { N_SLICES, ROT_SPEED } = Disassembly;
     this._slices = Array.from({ length: N_SLICES }, () => ({
@@ -179,7 +252,7 @@ class Disassembly {
   }
 
   _updateSlices(st) {
-    if (st < this._prevSt - 0.5) this._initSliceState();
+    if (st < this._prevSt - 0.5) { this._initSliceState(); this._initCamState(); }
     const dt = Math.min(Math.abs(st - this._prevSt), 0.1) * Math.sign(st - this._prevSt);
     this._prevSt = st;
     const p = Math.min(st / 10.0, 1.0);
@@ -220,11 +293,25 @@ class Disassembly {
     const st = Math.max(0, ts_s - this.t0);
     const { N_SLICES } = Disassembly;
 
+    this._grid.draw();
     this._updateSlices(st);
 
-    const proj = mat4pers(40 * Math.PI / 180, this.aspect, 0.1, 20);
-    const view = mat4look(0, 0.3, 3.5,  0, 0, 0,  0, 1, 0);
+    const [ex, ey, ez] = this._updateCam(st);
+    const proj = mat4pers(40 * Math.PI / 180, this.aspect, 0.1, 200);
+    const view = mat4look(ex, ey, ez,  0, 0, 0,  0, 1, 0);
     const mvp  = mat4mul(proj, view);
+
+    // Stars — use rotation-only view (camera at origin facing same direction)
+    const starView = mat4look(0, 0, 0,  -ex, -ey, -ez,  0, 1, 0);
+    const starMVP  = mat4mul(proj, starView);
+    gl.useProgram(this._starProg);
+    gl.uniformMatrix4fv(this._starUMVP, false, starMVP);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._starVbo);
+    gl.enableVertexAttribArray(this._starAStar);
+    gl.vertexAttribPointer(this._starAStar, 4, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.POINTS, 0, Disassembly.N_STARS);
+    gl.disableVertexAttribArray(this._starAStar);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
     const lx = 0.6, ly = 0.8, lz = 0.4;
     const ll = Math.sqrt(lx*lx + ly*ly + lz*lz);
@@ -253,8 +340,8 @@ class Disassembly {
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
     gl.disable(gl.DEPTH_TEST);
 
-    if (st >= 20) {
-      const p      = Math.min((st - 20) / 30, 1.0);
+    if (st >= 35) {
+      const p      = Math.min((st - 35) / 30, 1.0);
       const maxR   = Math.sqrt(this._FW * this._FW + this._FH * this._FH) / 2;
       const radius = p * maxR;
       gl.useProgram(this._circleProg);

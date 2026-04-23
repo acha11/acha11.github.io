@@ -9,6 +9,7 @@ class EarthSatellites {
     this._stripLengths = [];
     this._initEarthProgram();
     this._initSatProgram();
+    this._grid = new CrtGrid(gl);
     this._earthVbo = gl.createBuffer();
     this._satVbo   = gl.createBuffer();
     this._generateOrbits();
@@ -154,6 +155,7 @@ class EarthSatellites {
 
   draw(ts_s) {
     const gl   = this.gl;
+    this._grid.draw();
     const TILT = 23.44 * Math.PI / 180;
     const R_spin = mat4axisAngle(0, 1, 0, ts_s * (2 * Math.PI / 120));
     const R_tilt = mat4axisAngle(0, 0, 1, -TILT);
