@@ -5,12 +5,13 @@ class Disassembly {
   static ELONGATE_AMP = 0.7;
   static N_STARS      = 800;
 
-  constructor(gl, FW, FH, t0) {
-    this.gl     = gl;
-    this.aspect = FW / FH;
-    this._FW    = FW;
-    this._FH    = FH;
-    this.t0     = t0;
+  constructor(gl, FW, FH, t0, triggers = {}) {
+    this.gl       = gl;
+    this.aspect   = FW / FH;
+    this._FW      = FW;
+    this._FH      = FH;
+    this.t0       = t0;
+    this._triggers = triggers;
     this._initProgram();
     this._initCircleProgram();
     this._initStarProgram();
@@ -196,11 +197,12 @@ class Disassembly {
 
   _updateCam(st) {
     if (st < 20) return this._camPos;
-    if (st >= this._nextCamMove) {
+    if (st < 50 && st >= this._nextCamMove) {
       this._camFrom     = [...this._camPos];
       this._camTo       = this._randomCamPos(st);
       this._camLerpT    = st;
       this._nextCamMove = st + 0.2 + 0.3 + Math.random() * 1;
+      this._triggers.screenshake?.({ duration: 0.15 }, this.t0 + st);
     }
     const p = Math.min((st - this._camLerpT) / 0.2, 1.0);
     this._camPos = [
