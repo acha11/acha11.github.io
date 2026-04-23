@@ -25,6 +25,7 @@
   <script src="js/hv_net.js"></script>
   <script src="js/sierpinski.js"></script>
   <script src="js/grass.js"></script>
+  <script src="js/disassembly.js"></script>
   <script src="js/text_renderer.js"></script>
 </head>
 <body>
@@ -204,6 +205,11 @@
       uniform sampler2D u_scene;
       uniform sampler2D u_bloom;
       uniform float u_specular; // 0=off, 1=on (ceiling light flicker)
+      uniform vec2 u_shake;     // content offset in UV space
+      uniform float u_time;
+      uniform float u_ripple;   // ripple amplitude (0 = off)
+      uniform vec2  u_ripple_ctr;
+      uniform float u_warp;    // corner squash strength [0,1]
       varying vec2 v_uv;
 
       vec2 barrel(vec2 uv) {
@@ -214,18 +220,29 @@
       }
 
       void main() {
-        vec2 ndc = v_uv * 2.0 - 1.0;
-        vec2 uv  = barrel(v_uv);
+        vec2 ndc     = v_uv * 2.0 - 1.0;
+        vec2 glassUV = barrel(v_uv);      // CRT outline — never shifts
 
         // black outside the curved screen boundary
-        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+        if (glassUV.x < 0.0 || glassUV.x > 1.0 || glassUV.y < 0.0 || glassUV.y > 1.0) {
           gl_FragColor = vec4(0, 0, 0, 1.0);
           return;
         }
 
-        vec3 b = texture2D(u_bloom, uv).rgb * 3.0;
-        vec3 c = texture2D(u_scene, uv).rgb + b / (1.0 + b * 5.5);
-        float lum = dot(min(c, 1.0), vec3(0.299, 0.587, 0.114));
+        vec2 rippleDelta = glassUV - u_ripple_ctr;
+        float rippleDist = length(rippleDelta);
+        vec2 rippleDir   = rippleDist > 0.001 ? rippleDelta / rippleDist : vec2(0.0);
+        float rippleDecay = exp(-rippleDist * 4.0);
+        float rippleSin   = sin(rippleDist * 30.0 - u_time * 1.0);
+        float warpFactor  = pow(glassUV.x, 3.0) * pow(1.0 - glassUV.y, 3.0);
+        vec2 warpOffset   = (glassUV - vec2(0.5)) * warpFactor * u_warp * 3.0;
+        vec2 contentUV    = glassUV + rippleDir * u_ripple * rippleSin * rippleDecay + warpOffset + u_shake;
+        float lum = 0.0;
+        if (contentUV.x >= 0.0 && contentUV.x <= 1.0 && contentUV.y >= 0.0 && contentUV.y <= 1.0) {
+          vec3 b = texture2D(u_bloom, contentUV).rgb * 3.0;
+          vec3 c = texture2D(u_scene, contentUV).rgb + b / (1.0 + b * 5.5);
+          lum = dot(min(c, 1.0), vec3(0.299, 0.587, 0.114));
+        }
 
         // vignette
         float vignette = 1.0 - dot(ndc, ndc) * 0.25;
@@ -242,7 +259,9 @@
         float fresnel = fresnelBase * (0.4 + 0.6 * u_specular);
       
         float scene = lum * vignette * 0.9 + 0.08;
-        gl_FragColor = vec4(vec3(scene + spec + fresnel), 1.0);
+        float base  = scene + spec + fresnel;
+        float rippleTint = 0.0; // u_ripple * abs(rippleSin) * rippleDecay * 10.0;
+        gl_FragColor = vec4(base + rippleTint, base + rippleTint, base + rippleTint, 1.0);
       }
     `);
 
@@ -250,13 +269,17 @@
     const compUScene  = gl.getUniformLocation(compositeProg, 'u_scene');
     const compUBloom  = gl.getUniformLocation(compositeProg, 'u_bloom');
     const compUSpec   = gl.getUniformLocation(compositeProg, 'u_specular');
+    const compUShake  = gl.getUniformLocation(compositeProg, 'u_shake');
+    const compUTime   = gl.getUniformLocation(compositeProg, 'u_time');
+    const compURipple    = gl.getUniformLocation(compositeProg, 'u_ripple');
+    const compURippleCtr = gl.getUniformLocation(compositeProg, 'u_ripple_ctr');
+    const compUWarp   = gl.getUniformLocation(compositeProg, 'u_warp');
 
     // Scenes — each scene determines which components render. Transitions fire
     // from three sources: scheduled (time-based), random (organic variation),
     // and manual (ArrowLeft/ArrowRight re-shift the global clock to the prev/
     // next scheduled entry).
     const SCENE = {
-      SOLAR_SYSTEM:    'SOLAR_SYSTEM',
       SOLAR_SYSTEM2:   'SOLAR_SYSTEM2',
       QUORUM_LOST:    'QUORUM_LOST',
       QUORUM_SPEARED: 'QUORUM_SPEARED',
@@ -269,10 +292,13 @@
       HV_NET:              'HV_NET',
       SIERPINSKI:          'SIERPINSKI',
       GRASS:               'GRASS',
+      DISASSEMBLY:         'DISASSEMBLY',
     };
 
     const SCHEDULE = [
-      { t:  0,    scene: SCENE.SOLAR_SYSTEM },
+      { t:  0,    scene: SCENE.SOLAR_SYSTEM2 },
+      { t:  1,    trigger: 'screenshake', params: { duration: 0.2 } },
+      { t:  5,    trigger: 'screenshake', params: { duration: 0.7 } },
       { t: 20,    scene: SCENE.QUORUM_LOST },
       { t: 24,    scene: SCENE.RESYNCING },
       { t: 26.5,  scene: SCENE.SOLAR_SYSTEM2 },
@@ -281,30 +307,34 @@
       { t: 56.5,  scene: SCENE.EARTH },
       { t: 66.5,  scene: SCENE.EARTH_SATELLITES },
       { t: 81.5,  scene: SCENE.CORONA },
+      { t:  88.5,    trigger: 'warp', params: { duration: 1.5 } },
       { t: 101.5, scene: SCENE.HV_NET },
       { t: 111.5, scene: SCENE.SIERPINSKI },
       { t: 141.5, scene: SCENE.GRASS },
+      { t: 171.5, scene: SCENE.DISASSEMBLY },
       { t: 300,   scene: SCENE.QUORUM_SPEARED },
     ];
 
     function sceneComponents(scene) {
-      if (scene === SCENE.QUORUM_LOST)    return { stars: false, solarSystem: false, message: 'PEERING QUORUM LOST. SEEKING.' };
-      if (scene === SCENE.QUORUM_SPEARED) return { stars: false, solarSystem: false, message: 'PEERING QUORUM LOST. SEEKING.' };
-      if (scene === SCENE.RESYNCING)   return { stars: false, solarSystem: false, message: 'QUORUM REESTABLISHED. RESYNCING...' };
-      if (scene === SCENE.PROBE)              return { stars: true,  solarSystem: false, message: null };
-      if (scene === SCENE.PROBE_INTERSTELLAR) return { stars: false, solarSystem: false, message: null };
-      if (scene === SCENE.EARTH)              return { stars: true,  solarSystem: false, message: null };
-      if (scene === SCENE.EARTH_SATELLITES)   return { stars: true,  solarSystem: false, message: null };
-      if (scene === SCENE.CORONA)             return { stars: true,  solarSystem: false, message: null };
-      if (scene === SCENE.HV_NET)             return { stars: false, solarSystem: false, message: null };
-      if (scene === SCENE.SIERPINSKI)         return { stars: false, solarSystem: false, message: null };
-      if (scene === SCENE.GRASS)              return { stars: true,  solarSystem: false, message: null };
-      if (scene === SCENE.SOLAR_SYSTEM2)      return { stars: true,  solarSystem: false, message: null };
-      return { stars: true, solarSystem: true, message: null };
+      if (scene === SCENE.QUORUM_LOST)        return { stars: false, message: 'PEERING QUORUM LOST. SEEKING.' };
+      if (scene === SCENE.QUORUM_SPEARED)     return { stars: false, message: 'PEERING QUORUM LOST. SEEKING.' };
+      if (scene === SCENE.RESYNCING)          return { stars: false, message: 'QUORUM REESTABLISHED. RESYNCING...' };
+      if (scene === SCENE.PROBE)              return { stars: true,  message: null };
+      if (scene === SCENE.PROBE_INTERSTELLAR) return { stars: false, message: null };
+      if (scene === SCENE.EARTH)              return { stars: true,  message: null };
+      if (scene === SCENE.EARTH_SATELLITES)   return { stars: true,  message: null };
+      if (scene === SCENE.CORONA)             return { stars: true,  message: null };
+      if (scene === SCENE.HV_NET)             return { stars: false, message: null };
+      if (scene === SCENE.SIERPINSKI)         return { stars: false, message: null };
+      if (scene === SCENE.GRASS)              return { stars: true,  message: null };
+      if (scene === SCENE.DISASSEMBLY)        return { stars: false, message: null };
+      if (scene === SCENE.SOLAR_SYSTEM2)      return { stars: true,  message: null };
+      return { stars: true, message: null };
     }
 
-    let currentScene = SCHEDULE[0].scene;
-    let scheduleIdx  = -1;       // highest schedule entry already applied
+    let currentScene     = SCHEDULE[0].scene;
+    let scheduleIdx      = -1;   // highest schedule entry already applied
+    let triggerFiredUpTo = -1;   // highest entry index whose trigger has fired
     let timeShift    = 0;        // adjusted by manual skips so ts_s = raw + timeShift
 
     // QUORUM_LOST peer-count animation state
@@ -319,15 +349,38 @@
       for (let i = 0; i < SCHEDULE.length; i++) {
         if (SCHEDULE[i].t <= ts_s) newIdx = i; else break;
       }
+
+      // Fire triggers for any entries crossed since last frame (forward only).
+      if (newIdx > triggerFiredUpTo) {
+        for (let i = triggerFiredUpTo + 1; i <= newIdx; i++) {
+          const e = SCHEDULE[i];
+          if (e.trigger) {
+            const fn = window['trigger_' + e.trigger];
+            if (fn) fn(e.params, ts_s);
+          }
+        }
+        triggerFiredUpTo = newIdx;
+      } else if (newIdx < triggerFiredUpTo) {
+        triggerFiredUpTo = newIdx; // jumped backward — reset without re-firing
+      }
+
       if (newIdx !== scheduleIdx) {
         scheduleIdx = newIdx;
         if (newIdx >= 0) {
-          currentScene = SCHEDULE[newIdx].scene;
-          // Reset peer state whenever we (re-)enter QUORUM_LOST.
-          if (currentScene === SCENE.QUORUM_LOST) {
-            quorumLostStartT = ts_s;
-            peerCount        = 0;
-            nextPeerIncrT    = ts_s + 0.5 + Math.random() * 1.0;
+          // Find the most recent scene entry at or before newIdx.
+          for (let i = newIdx; i >= 0; i--) {
+            if (!SCHEDULE[i].scene) continue;
+            const newScene = SCHEDULE[i].scene;
+            if (newScene !== currentScene) {
+              currentScene = newScene;
+              // Reset peer state whenever we (re-)enter QUORUM_LOST.
+              if (currentScene === SCENE.QUORUM_LOST) {
+                quorumLostStartT = ts_s;
+                peerCount        = 0;
+                nextPeerIncrT    = ts_s + 0.5 + Math.random() * 1.0;
+              }
+            }
+            break;
           }
         }
       }
@@ -350,11 +403,20 @@
       const curT = rawT + timeShift;
       let target = null;
       if (dir === 'right') {
-        for (const s of SCHEDULE) { if (s.t > curT + 1.0) { target = s; break; } }
+        for (const s of SCHEDULE) { if (s.scene && s.t > curT + 1.0) { target = s; break; } }
       } else {
-        for (const s of SCHEDULE) { if (s.t < curT - 1.0) target = s; else break; }
+        for (const s of SCHEDULE) { if (s.t >= curT - 1.0) break; if (s.scene) target = s; }
       }
-      if (target) { timeShift = target.t - rawT; scheduleIdx = -1; }
+      if (target) {
+        timeShift   = target.t - rawT;
+        scheduleIdx = -1;
+        shakeStartT = -1e9;
+        let tIdx = -1;
+        for (let i = 0; i < SCHEDULE.length; i++) {
+          if (SCHEDULE[i].t <= target.t) tIdx = i; else break;
+        }
+        triggerFiredUpTo = tIdx;
+      }
     }
 
     window.addEventListener('keydown', (ev) => {
@@ -426,18 +488,6 @@
     const SY = 0.9 / MAX_D;                           // display units → clip y
     const SX = SY * (FH / FW);                        // correct for 4:3 FBO aspect
 
-    // ── Sun circle (TRIANGLE_FAN, generated once) ────────────────────────────
-
-    const SUN_R = 0.36; // display units → ~5 px radius at 320×240
-    const SUN_N = 32;
-    const sunVerts = new Float32Array((SUN_N + 2) * 2);
-    sunVerts[0] = 0; sunVerts[1] = 0;
-    for (let k = 0; k <= SUN_N; k++) {
-      const a = (k / SUN_N) * 2 * Math.PI;
-      sunVerts[2 + k*2]     = Math.cos(a) * SUN_R;
-      sunVerts[2 + k*2 + 1] = Math.sin(a) * SUN_R;
-    }
-
     // ── Stars (random points on sphere surface) ─────────────────────────────
 
     const N_STARS = 1200;
@@ -495,10 +545,6 @@
       // cos starts at 1 → θ = π/2 + CAM_AMP (matches intro end), then swings to π/2 - CAM_AMP
       return Math.PI / 2 + CAM_AMP * Math.cos(2 * Math.PI * (ts_s - CAM_INTRO) / CAM_PERIOD);
     }
-
-    const ORBIT_N = 256;
-    const GAP     = 0.15; // half-gap in eccentric anomaly (rad, ≈ 8.6°)
-    const tmpV    = new Float32Array((ORBIT_N + 1) * 2);
 
     // ── Pie chart panel (top-right) ──────────────────────────────────────────
 
@@ -686,9 +732,34 @@
     // ── SIERPINSKI STORK: billboard impostors at fractal leaf positions ──────────
 
     const sierpinski = new Sierpinski(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.SIERPINSKI).t);
-    const grass      = new Grass(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.GRASS).t);
+    const grass        = new Grass(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.GRASS).t);
+    const disassemblyT0 = SCHEDULE.find(e => e.scene === SCENE.DISASSEMBLY).t;
+    const disassembly   = new Disassembly(gl, FW / FH, disassemblyT0);
 
     let fpsPrev = 0, fpsEma = 60;
+    let shakeStartT  = -1e9;
+    let shakeDuration = 0.3;
+
+    function trigger_screenshake(params, ts_s) {
+      shakeStartT   = ts_s;
+      shakeDuration = params?.duration ?? 0.3;
+    }
+
+    let warpStartT   = 1e9;
+    let warpDuration = 5.0;
+    function trigger_warp(params, ts_s) { warpStartT = ts_s; warpDuration = params?.duration ?? 5.0; }
+
+    function catmullRom(p0, p1, p2, p3, t) {
+      const t2 = t * t, t3 = t2 * t;
+      return {
+        x: 0.5 * (2*p1.x + (-p0.x+p2.x)*t + (2*p0.x-5*p1.x+4*p2.x-p3.x)*t2 + (-p0.x+3*p1.x-3*p2.x+p3.x)*t3),
+        y: 0.5 * (2*p1.y + (-p0.y+p2.y)*t + (2*p0.y-5*p1.y+4*p2.y-p3.y)*t2 + (-p0.y+3*p1.y-3*p2.y+p3.y)*t3),
+      };
+    }
+    const randRipplePt = () => ({ x: 0.85 + Math.random() * 0.2, y: 0.85 + Math.random() * 0.2 });
+    const RIPPLE_SEG   = 10.0; // seconds per waypoint segment
+    let ripplePts      = [randRipplePt(), randRipplePt(), randRipplePt(), randRipplePt()];
+    let rippleSegStartT = 0;
 
     function render(ts) {
       if (fpsPrev) fpsEma = fpsEma * 0.9 + (1000 / (ts - fpsPrev)) * 0.1;
@@ -753,30 +824,6 @@
       gl.vertexAttrib1f(aBrightness, 1.0);
       gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
 
-      if (components.solarSystem) {
-        // Sun
-        gl.uniform4f(uColor, 1.0, 1.0, 0.5, 1.0);
-        gl.bufferData(gl.ARRAY_BUFFER, sunVerts, gl.DYNAMIC_DRAW);
-        gl.drawArrays(gl.TRIANGLE_FAN, 0, SUN_N + 2);
-
-        // Orbits
-        gl.uniform4f(uColor, 0.5, 0.5, 0.5, 0.5);
-        for (const p of SolarSystem.PLANETS) {
-          const Ep = SolarSystem.eccAnomaly(p, t);
-          const E0 = Ep + GAP, E1 = Ep + 2 * Math.PI - GAP;
-          for (let k = 0; k <= ORBIT_N; k++) {
-            const E = E0 + (E1 - E0) * k / ORBIT_N;
-            const [x, y, z] = SolarSystem.orbitPoint(p, E);
-            const xr = x * cPhi - y * sPhi;
-            const yr = x * sPhi + y * cPhi;
-            tmpV[k * 2]     = xr;
-            tmpV[k * 2 + 1] = yr * cTh + z * sTh;
-          }
-          gl.bufferData(gl.ARRAY_BUFFER, tmpV, gl.DYNAMIC_DRAW);
-          gl.drawArrays(gl.LINE_STRIP, 0, ORBIT_N + 1);
-        }
-      }
-
       if (activeScene === SCENE.PROBE_INTERSTELLAR || activeScene === SCENE.SIERPINSKI) warpStars.draw(ts_s);
       if (activeScene === SCENE.HV_NET)       hvNet.draw(ts_s);
       if (activeScene === SCENE.SIERPINSKI)   sierpinski.draw(ts_s);
@@ -785,7 +832,8 @@
       if (activeScene === SCENE.EARTH) earth.draw(ts_s);
       if (activeScene === SCENE.EARTH_SATELLITES) earthSatellites.draw(ts_s);
       if (activeScene === SCENE.CORONA) corona.draw(ts_s);
-      if (activeScene === SCENE.GRASS)  grass.draw(ts_s);
+      if (activeScene === SCENE.GRASS)        grass.draw(ts_s);
+      if (activeScene === SCENE.DISASSEMBLY)  disassembly.draw(ts_s);
 
       // Pie chart — top-right, drawn in clip space
       const pieShrinkStart = 2;
@@ -796,6 +844,7 @@
       gl.bindBuffer(gl.ARRAY_BUFFER, dynBuf);
       gl.uniform1f(uSx, 1.0);
       gl.uniform1f(uSy, 1.0);
+      gl.enableVertexAttribArray(aPos);
       gl.disableVertexAttribArray(aBrightness);
       gl.vertexAttrib1f(aBrightness, 1.0);
       if (pieFrac > 0.0) {
@@ -884,6 +933,43 @@
       gl.bindTexture(gl.TEXTURE_2D, blurVFBO.tex);
       gl.uniform1i(compUBloom, 1);
       gl.uniform1f(compUSpec, updateSpecular(ts_s));
+      const shakeAge = ts_s - shakeStartT;
+      let shakeX = 0, shakeY = 0;
+      if (shakeAge < shakeDuration) {
+        const mag = 5 * (1 - shakeAge / shakeDuration);
+        const angle = Math.random() * 2 * Math.PI;
+        shakeX = Math.cos(angle) * mag;
+        shakeY = Math.sin(angle) * mag;
+      }
+      gl.uniform2f(compUShake, shakeX / FW, shakeY / FH);
+      gl.uniform1f(compUTime, ts_s);
+      const inDisassembly = activeScene === SCENE.DISASSEMBLY;
+      const disassemblyMult = inDisassembly ? 1 + 7 * Math.min((ts_s - disassemblyT0) / 10.0, 1.0) : 1;
+      const rippleAmp = 0.015 * Math.min(ts_s / 60.0, 1.0) * disassemblyMult;
+      gl.uniform1f(compURipple, rippleAmp);
+      if (ts_s < rippleSegStartT) {
+        ripplePts = [randRipplePt(), randRipplePt(), randRipplePt(), randRipplePt()];
+        rippleSegStartT = ts_s;
+      }
+      let rippleSegT = Math.min((ts_s - rippleSegStartT) / RIPPLE_SEG, 1.0);
+      if (rippleSegT >= 1.0) {
+        ripplePts.shift(); ripplePts.push(randRipplePt());
+        rippleSegStartT = ts_s; rippleSegT = 0.0;
+      }
+      const rc = catmullRom(ripplePts[0], ripplePts[1], ripplePts[2], ripplePts[3], rippleSegT);
+      const rippleCtrX = inDisassembly ? 0.5 : rc.x;
+      const rippleCtrY = inDisassembly ? 0.5 : rc.y;
+      gl.uniform2f(compURippleCtr, rippleCtrX, rippleCtrY);
+      const warpAge = ts_s - warpStartT;
+      let warpVal = 0.0;
+      if (warpAge >= 0 && warpAge < warpDuration) {
+        const t = warpAge / warpDuration;
+        warpVal = t * t * t;                                          // cubic ease-in
+      } else if (warpAge >= warpDuration) {
+        const p = warpAge - warpDuration;
+        warpVal = Math.exp(-40 * p) * Math.cos(120 * p);             // damped bounce
+      }
+      gl.uniform1f(compUWarp, warpVal);
       gl.drawArrays(gl.TRIANGLES, 0, 6);
       gl.activeTexture(gl.TEXTURE0);
 

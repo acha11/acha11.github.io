@@ -1,6 +1,8 @@
 class Corona {
-  static W = 160;
-  static H = 60;
+  static W         = 160;
+  static H         = 60;
+  static N_SPOTS   = 12;
+  static DRIFT_SPEED = 0.002; // clip-space units/s leftward drift
 
   constructor(gl, t0) {
     this.gl        = gl;
@@ -12,6 +14,31 @@ class Corona {
     this._initProgram();
     this._initTexture();
     this._initQuad();
+    this._initSpots();
+  }
+
+  _initSpots() {
+    const { N_SPOTS } = Corona;
+    this._spots = [];
+    const half = N_SPOTS / 2;
+
+    const rnd = () => { const a = Math.random() * 2 * Math.PI, r = 0.03 + Math.random() * 0.13; return [Math.cos(a)*r, Math.sin(a)*r]; };
+
+    // First half: scattered randomly across the disc
+    for (let i = 0; i < half; i++) {
+      const [x, y] = rnd();
+      this._spots.push({ x, y, spotR: 0.001125 + Math.random() * 0.001375, bright: 0.5 + Math.random() * 0.2 });
+    }
+
+    // Second half: clustered around a random centre point on the disc
+    const ca = Math.random() * 2 * Math.PI, cr = 0.04 + Math.random() * 0.10;
+    const cx = Math.cos(ca) * cr, cy = Math.sin(ca) * cr;
+    for (let i = 0; i < half; i++) {
+      const oa = Math.random() * 2 * Math.PI, or_ = Math.random() * 0.025;
+      this._spots.push({ x: cx + Math.cos(oa)*or_, y: cy + Math.sin(oa)*or_, spotR: 0.001125 + Math.random() * 0.001375, bright: 0.5 + Math.random() * 0.2 });
+    }
+
+    this._spotFlat = new Float32Array(N_SPOTS * 4);
   }
 
   _initProgram() {
@@ -26,6 +53,7 @@ class Corona {
       uniform sampler2D u_fire;
       uniform float u_zoom;
       uniform float u_center_y;
+      uniform vec4 u_spots[12];
       void main() {
         const float PI     = 3.14159265;
         const float RADIUS = 0.22;
@@ -38,7 +66,13 @@ class Corona {
         float raw   = clamp(texture2D(u_fire, vec2(fireU, fireV)).r * 1.5, 0.0, 1.0);
         float t     = mix(raw, floor(raw * 4.0 + 0.5) / 4.0, 0.1);
         vec4 fireCol = vec4(t, t, t, t);
-        vec4 discCol = vec4(0.8, 0.8, 0.8, 1.0);
+        float discB = 0.8;
+        for (int i = 0; i < 12; i++) {
+          float d    = length(p - u_spots[i].xy);
+          float mask = 1.0 - smoothstep(u_spots[i].z * 0.3, u_spots[i].z, d);
+          discB = min(discB, mix(0.8, u_spots[i].w, mask));
+        }
+        vec4 discCol = vec4(discB, discB, discB, 1.0);
         float edge = smoothstep(RADIUS - 0.015, RADIUS + 0.015, dist);
         gl_FragColor = mix(discCol, fireCol, edge);
       }
@@ -46,6 +80,7 @@ class Corona {
     this._uFire    = gl.getUniformLocation(this._prog, 'u_fire');
     this._uZoom    = gl.getUniformLocation(this._prog, 'u_zoom');
     this._uCenterY = gl.getUniformLocation(this._prog, 'u_center_y');
+    this._uSpots   = gl.getUniformLocation(this._prog, 'u_spots');
     this._aPos  = gl.getAttribLocation(this._prog, 'a_pos');
   }
 
@@ -138,6 +173,16 @@ class Corona {
       this._lastStep = now;
     }
 
+    const { N_SPOTS, DRIFT_SPEED } = Corona;
+    const drift = st * DRIFT_SPEED;
+    for (let i = 0; i < N_SPOTS; i++) {
+      const s = this._spots[i];
+      this._spotFlat[i*4]   = s.x - drift;
+      this._spotFlat[i*4+1] = s.y;
+      this._spotFlat[i*4+2] = s.spotR;
+      this._spotFlat[i*4+3] = s.bright;
+    }
+
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -147,6 +192,7 @@ class Corona {
     gl.uniform1i(this._uFire, 0);
     gl.uniform1f(this._uZoom, zoom);
     gl.uniform1f(this._uCenterY, centerY);
+    gl.uniform4fv(this._uSpots, this._spotFlat);
     gl.bindBuffer(gl.ARRAY_BUFFER, this._quadBuf);
     gl.enableVertexAttribArray(this._aPos);
     gl.vertexAttribPointer(this._aPos, 2, gl.FLOAT, false, 0, 0);
