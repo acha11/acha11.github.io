@@ -312,6 +312,11 @@
       { t: 111.5, scene: SCENE.SIERPINSKI },
       { t: 141.5, scene: SCENE.GRASS },
       { t: 171.5, scene: SCENE.DISASSEMBLY },
+      { t: 174.2, trigger: 'screenshake', params: { duration: 0.2 } },
+      { t: 178.7, trigger: 'screenshake', params: { duration: 0.4 } },
+      { t: 183.1, trigger: 'screenshake', params: { duration: 0.3 } },
+      { t: 191.5, trigger: 'screenshake', params: { duration: 0.5 } },
+      { t: 197.3, trigger: 'screenshake', params: { duration: 0.3 } },
       { t: 300,   scene: SCENE.QUORUM_SPEARED },
     ];
 
@@ -734,7 +739,7 @@
     const sierpinski = new Sierpinski(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.SIERPINSKI).t);
     const grass        = new Grass(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.GRASS).t);
     const disassemblyT0 = SCHEDULE.find(e => e.scene === SCENE.DISASSEMBLY).t;
-    const disassembly   = new Disassembly(gl, FW / FH, disassemblyT0);
+    const disassembly   = new Disassembly(gl, FW, FH, disassemblyT0);
 
     let fpsPrev = 0, fpsEma = 60;
     let shakeStartT  = -1e9;
@@ -944,7 +949,13 @@
       gl.uniform2f(compUShake, shakeX / FW, shakeY / FH);
       gl.uniform1f(compUTime, ts_s);
       const inDisassembly = activeScene === SCENE.DISASSEMBLY;
-      const disassemblyMult = inDisassembly ? 1 + 7 * Math.min((ts_s - disassemblyT0) / 10.0, 1.0) : 1;
+      let disassemblyMult = 1;
+      if (inDisassembly) {
+        const age     = ts_s - disassemblyT0;
+        const rampIn  = Math.min(Math.max(age - 3, 0) / 10.0, 1.0);
+        const rampOut = age >= 20 ? Math.max(1.0 - (age - 20) / 6.0, 0.0) : 1.0;
+        disassemblyMult = (1 + 7 * rampIn) * rampOut;
+      }
       const rippleAmp = 0.015 * Math.min(ts_s / 60.0, 1.0) * disassemblyMult;
       gl.uniform1f(compURipple, rippleAmp);
       if (ts_s < rippleSegStartT) {

@@ -4,11 +4,14 @@ class Disassembly {
   static ROT_SPEED    = 0.5;   // rad/s base rotation
   static ELONGATE_AMP = 0.7;   // max Y spread at peak
 
-  constructor(gl, aspect, t0) {
+  constructor(gl, FW, FH, t0) {
     this.gl     = gl;
-    this.aspect = aspect;
+    this.aspect = FW / FH;
+    this._FW    = FW;
+    this._FH    = FH;
     this.t0     = t0;
     this._initProgram();
+    this._initCircleProgram();
     this._initGeometry();
     this._initSliceState();
   }
@@ -45,6 +48,29 @@ class Disassembly {
     this._uLight   = gl.getUniformLocation(this._prog, 'u_light');
     this._aPos    = gl.getAttribLocation(this._prog, 'a_pos');
     this._aNormal = gl.getAttribLocation(this._prog, 'a_normal');
+  }
+
+  _initCircleProgram() {
+    const gl = this.gl;
+    this._circleProg = createProgram(`
+      attribute vec2 a_pos;
+      void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
+    `, `
+      precision mediump float;
+      uniform vec2  u_center;
+      uniform float u_radius;
+      void main() {
+        if (length(gl_FragCoord.xy - u_center) > u_radius) discard;
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+      }
+    `);
+    this._circleUCenter = gl.getUniformLocation(this._circleProg, 'u_center');
+    this._circleURadius = gl.getUniformLocation(this._circleProg, 'u_radius');
+    this._circleAPos    = gl.getAttribLocation(this._circleProg, 'a_pos');
+    this._circleQuad    = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._circleQuad);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
   _initGeometry() {
@@ -121,6 +147,8 @@ class Disassembly {
       jitterOffset: 0,
       jitterEndT:   0,
       nextJitterT:  7 + Math.random() * 2,
+      hideEndT:     0,
+      nextHideT:    5 + Math.random() * 8,
     }));
     this._prevSt    = 0;
     this._elongState = 'idle';
@@ -163,6 +191,16 @@ class Disassembly {
       }
       sl.angle += sl.speed * speedMult * dt;
 
+      if (st >= 5) {
+        if (sl.hideEndT > 0 && st >= sl.hideEndT) {
+          sl.hideEndT  = 0;
+          sl.nextHideT = st + 1 + Math.random() * 4;
+        }
+        if (sl.hideEndT === 0 && st >= sl.nextHideT) {
+          sl.hideEndT = st + 0.25;
+        }
+      }
+
       if (st >= 7) {
         const jitterScale = Math.max(0.05, 1.0 - 0.95 * Math.min((st - 7) / 10, 1.0));
         if (sl.jitterOffset !== 0 && st >= sl.jitterEndT) {
@@ -199,6 +237,7 @@ class Disassembly {
     const spread = Disassembly.ELONGATE_AMP * this._updateElong(st);
 
     for (let s = 0; s < N_SLICES; s++) {
+      if (st < this._slices[s].hideEndT) continue;
       const phiMid = (this._phiBounds[s] + this._phiBounds[s + 1]) / 2;
       gl.uniform1f(this._uYOffset, spread * Math.sin(phiMid) + this._slices[s].jitterOffset);
       gl.uniform1f(this._uRot, this._slices[s].angle);
@@ -213,5 +252,20 @@ class Disassembly {
     gl.disableVertexAttribArray(this._aNormal);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
     gl.disable(gl.DEPTH_TEST);
+
+    if (st >= 20) {
+      const p      = Math.min((st - 20) / 30, 1.0);
+      const maxR   = Math.sqrt(this._FW * this._FW + this._FH * this._FH) / 2;
+      const radius = p * maxR;
+      gl.useProgram(this._circleProg);
+      gl.uniform2f(this._circleUCenter, this._FW / 2, this._FH / 2);
+      gl.uniform1f(this._circleURadius, radius);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._circleQuad);
+      gl.enableVertexAttribArray(this._circleAPos);
+      gl.vertexAttribPointer(this._circleAPos, 2, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.disableVertexAttribArray(this._circleAPos);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    }
   }
 }
