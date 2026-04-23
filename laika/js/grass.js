@@ -10,7 +10,12 @@ class Grass {
   static METEOR_PEAK_Y  = 0.52;        // peak y at x=0
   static SHATTER_X      = 1.0 / 3.0;  // 2/3 of the way across (-1..+1)
   static SPARK_GRAVITY  = 0.03;        // clip/s² downward
-  static TRAIL_SPARK_MAX = 80;
+  static TRAIL_SPARK_MAX  = 80;
+  static SHOCKWAVE_T0     = 25.0;  // seconds into scene
+  static SHOCKWAVE_SPEED  = 0.38;  // units/s
+  static SHOCKWAVE_Y      = 0.042; // just above grass
+  static SHOCKWAVE_HW     = 0.015; // half-width of ring
+  static SHOCKWAVE_N      = 96;    // ring segments
 
   constructor(gl, aspect, t0) {
     this.gl       = gl;
@@ -19,6 +24,8 @@ class Grass {
     this._initProgram();
     this._initGeometry();
     this._initMeteorProgram();
+    this._shockBuf  = gl.createBuffer();
+    this._shockData = new Float32Array((Grass.SHOCKWAVE_N + 1) * 2 * 4);
     this._shattered      = false;
     this._shatterT       = 0;
     this._sparks         = null;
@@ -238,6 +245,38 @@ class Grass {
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
+  _drawShockwave(st, mvp) {
+    const { SHOCKWAVE_T0, SHOCKWAVE_SPEED, SHOCKWAVE_Y, SHOCKWAVE_HW, SHOCKWAVE_N } = Grass;
+    const age = st - SHOCKWAVE_T0;
+    if (age < 0) return;
+    const R = age * SHOCKWAVE_SPEED;
+    const bright = Math.max(0, 1.0 - R / 0.85);
+    if (bright <= 0 || R <= SHOCKWAVE_HW) return;
+
+    const d = this._shockData;
+    for (let k = 0; k <= SHOCKWAVE_N; k++) {
+      const a  = k / SHOCKWAVE_N * 2 * Math.PI;
+      const cx = Math.cos(a), cz = Math.sin(a);
+      const base = k * 8;
+      d[base]   = cx * (R + SHOCKWAVE_HW); d[base+1] = SHOCKWAVE_Y; d[base+2] = cz * (R + SHOCKWAVE_HW); d[base+3] = bright;
+      d[base+4] = cx * (R - SHOCKWAVE_HW); d[base+5] = SHOCKWAVE_Y; d[base+6] = cz * (R - SHOCKWAVE_HW); d[base+7] = bright;
+    }
+
+    const gl = this.gl;
+    gl.useProgram(this._prog);
+    gl.uniformMatrix4fv(this._uMVP, false, mvp);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._shockBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, d, gl.DYNAMIC_DRAW);
+    gl.enableVertexAttribArray(this._aPos);
+    gl.enableVertexAttribArray(this._aBright);
+    gl.vertexAttribPointer(this._aPos,    3, gl.FLOAT, false, 16, 0);
+    gl.vertexAttribPointer(this._aBright, 1, gl.FLOAT, false, 16, 12);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, (SHOCKWAVE_N + 1) * 2);
+    gl.disableVertexAttribArray(this._aPos);
+    gl.disableVertexAttribArray(this._aBright);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  }
+
   draw(ts_s) {
     const gl  = this.gl;
     const st  = Math.max(0, ts_s - this.t0);
@@ -262,6 +301,7 @@ class Grass {
     gl.disableVertexAttribArray(this._aPos);
     gl.disableVertexAttribArray(this._aBright);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    this._drawShockwave(st, mvp);
     gl.disable(gl.DEPTH_TEST);
 
     this._drawMeteor(st);
