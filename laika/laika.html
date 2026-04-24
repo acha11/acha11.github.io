@@ -27,6 +27,7 @@
   <script src="js/sierpinski.js"></script>
   <script src="js/grass.js"></script>
   <script src="js/disassembly.js"></script>
+  <script src="js/transcend.js"></script>
   <script src="js/text_renderer.js"></script>
 </head>
 <body>
@@ -296,6 +297,7 @@
       SIERPINSKI:          'SIERPINSKI',
       GRASS:               'GRASS',
       DISASSEMBLY:         'DISASSEMBLY',
+      TRANSCEND:           'TRANSCEND',
     };
 
     const SCHEDULE = [
@@ -322,6 +324,7 @@
       { t: 183.1, trigger: 'screenshake', params: { duration: 0.3, intensity: 1.5625 } },
       { t: 191.5, trigger: 'screenshake', params: { duration: 0.5, intensity: 1.953 } },
       { t: 197.3, trigger: 'screenshake', params: { duration: 0.3, intensity: 2.441 } },
+      { t: 255,   scene: SCENE.TRANSCEND },
       { t: 300,   scene: SCENE.QUORUM_SPEARED },
     ];
 
@@ -338,6 +341,7 @@
       if (scene === SCENE.SIERPINSKI)         return { stars: false, message: null };
       if (scene === SCENE.GRASS)              return { stars: true,  message: null };
       if (scene === SCENE.DISASSEMBLY)        return { stars: false, message: null };
+      if (scene === SCENE.TRANSCEND)          return { stars: false, message: null };
       if (scene === SCENE.SOLAR_SYSTEM)      return { stars: true,  message: null };
       return { stars: true, message: null };
     }
@@ -768,6 +772,7 @@
     const sierpinski = new Sierpinski(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.SIERPINSKI).t);
     const grass        = new Grass(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.GRASS).t);
     const disassemblyT0 = SCHEDULE.find(e => e.scene === SCENE.DISASSEMBLY).t;
+    const transcend     = new Transcend(gl, FW, FH, SCHEDULE.find(e => e.scene === SCENE.TRANSCEND).t);
     const triggers = {
       screenshake: (params, ts_s) => trigger_screenshake(params, ts_s),
     };
@@ -873,6 +878,7 @@
       if (activeScene === SCENE.CORONA) corona.draw(ts_s);
       if (activeScene === SCENE.GRASS)        grass.draw(ts_s);
       if (activeScene === SCENE.DISASSEMBLY)  disassembly.draw(ts_s);
+      if (activeScene === SCENE.TRANSCEND)    transcend.draw(ts_s);
 
       // Pie chart — top-right, drawn in clip space
       const pieShrinkStart = 2;
