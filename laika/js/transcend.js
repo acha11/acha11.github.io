@@ -12,7 +12,9 @@ class Transcend {
     this._nPoints = 0;
     this._ready   = false;
     this._initPointProgram();
+    this._initWhiteProgram();
     this._initStarProgram();
+    this._initFadeProgram();
     this._grid = new CrtGrid(gl);
     this._load();
   }
@@ -48,7 +50,69 @@ class Transcend {
     this._ptACol    = gl.getAttribLocation(this._ptProg, 'a_col');
     this._ptAScale  = gl.getAttribLocation(this._ptProg, 'a_scale');
     this._ptAOpacity = gl.getAttribLocation(this._ptProg, 'a_opacity');
-    this._vbo = gl.createBuffer();
+    this._vbo       = gl.createBuffer();
+    this._vboColour = gl.createBuffer();
+  }
+
+  _initWhiteProgram() {
+    const gl = this.gl;
+    this._whiteProg = createProgram(`
+      attribute vec3 a_pos;
+      attribute vec3 a_col;
+      attribute float a_scale;
+      attribute float a_opacity;
+      attribute vec3 a_dir;
+      attribute float a_delay;
+      uniform mat4 u_mvp;
+      uniform float u_focal;
+      uniform float u_anim_t;
+      varying float v_lum;
+      varying float v_opacity;
+      void main() {
+        v_lum      = dot(a_col, vec3(0.299, 0.587, 0.114));
+        float t    = max(0.0, u_anim_t - a_delay);
+        float fade = 1.0 - clamp((t - 3.0) / 2.0, 0.0, 1.0);
+        v_opacity  = a_opacity * fade;
+        vec3 pos   = a_pos + a_dir * t * t * 0.08;
+        gl_Position  = u_mvp * vec4(pos, 1.0);
+        gl_PointSize = max(1.0, u_focal * a_scale / gl_Position.w);
+      }
+    `, `
+      precision mediump float;
+      uniform float u_alpha;
+      varying float v_lum;
+      varying float v_opacity;
+      void main() { gl_FragColor = vec4(v_lum, v_lum, v_lum, v_opacity * u_alpha); }
+    `);
+    this._wUMVP    = gl.getUniformLocation(this._whiteProg, 'u_mvp');
+    this._wUFocal  = gl.getUniformLocation(this._whiteProg, 'u_focal');
+    this._wUAlpha  = gl.getUniformLocation(this._whiteProg, 'u_alpha');
+    this._wUAnimT  = gl.getUniformLocation(this._whiteProg, 'u_anim_t');
+    this._wAPos    = gl.getAttribLocation(this._whiteProg, 'a_pos');
+    this._wACol    = gl.getAttribLocation(this._whiteProg, 'a_col');
+    this._wAScale  = gl.getAttribLocation(this._whiteProg, 'a_scale');
+    this._wAOpacity = gl.getAttribLocation(this._whiteProg, 'a_opacity');
+    this._wADir    = gl.getAttribLocation(this._whiteProg, 'a_dir');
+    this._wADelay  = gl.getAttribLocation(this._whiteProg, 'a_delay');
+    this._animVbo  = gl.createBuffer();
+  }
+
+  _initFadeProgram() {
+    const gl = this.gl;
+    this._fadeProg = createProgram(`
+      attribute vec2 a_pos;
+      void main() { gl_Position = vec4(a_pos, 0.0, 1.0); }
+    `, `
+      precision mediump float;
+      uniform float u_alpha;
+      void main() { gl_FragColor = vec4(0.0, 0.0, 0.0, u_alpha); }
+    `);
+    this._fadeUAlpha = gl.getUniformLocation(this._fadeProg, 'u_alpha');
+    this._fadeAPos   = gl.getAttribLocation(this._fadeProg, 'a_pos');
+    this._fadeVbo    = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._fadeVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
   _initStarProgram() {
@@ -108,10 +172,56 @@ class Transcend {
 
     const gl   = this.gl;
     const data = new Float32Array(buf.slice(dataStart, dataStart + vertexCount * 32));
-    gl.bindBuffer(gl.ARRAY_BUFFER, this._vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+
+    // Separate into white (seeds) and coloured (stem/structure) by RGB saturation.
+    // White points have max-min ≈ 0; coloured points have spread > threshold.
+    const SAT_THRESHOLD = 0.11;
+    const white = [], colour = [];
+    for (let i = 0; i < vertexCount; i++) {
+      const base = i * 8;
+      const r = data[base+3], g = data[base+4], b = data[base+5];
+      const hi = Math.max(r, g, b), lo = Math.min(r, g, b);
+      const dst = (hi - lo) < SAT_THRESHOLD ? white : colour;
+      for (let k = 0; k < 8; k++) dst.push(data[base + k]);
+    }
+
+    const nWhite = white.length / 8;
+
+    // Build per-point animation data for white points: dir(xyz) + delay
+    const PIVOT = Transcend.PIVOT;
+    const MAX_DELAY = 8.0;
+    let Ymin = Infinity, Ymax = -Infinity;
+    for (let i = 0; i < nWhite; i++) {
+      const y = white[i*8 + 1];
+      if (y < Ymin) Ymin = y;
+      if (y > Ymax) Ymax = y;
+    }
+    const Yrange = Math.max(Ymax - Ymin, 1e-6);
+    const animData = new Float32Array(nWhite * 4);
+    for (let i = 0; i < nWhite; i++) {
+      const x = white[i*8], y = white[i*8+1], z = white[i*8+2];
+      let dx = x - PIVOT[0] + (Math.random() - 0.5) * 0.4;
+      let dy = y - PIVOT[1] + (Math.random() - 0.5) * 0.4;
+      let dz = z - PIVOT[2] + (Math.random() - 0.5) * 0.4;
+      const len = Math.sqrt(dx*dx + dy*dy + dz*dz) || 1;
+      animData[i*4]   = dx / len;
+      animData[i*4+1] = dy / len;
+      animData[i*4+2] = dz / len;
+      animData[i*4+3] = ((Ymax - y) / Yrange) * MAX_DELAY;
+    }
+
+    const upload = (vbo, arr) => {
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    };
+    upload(this._vbo, white);
+    upload(this._vboColour, colour);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._animVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, animData, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
-    this._nPoints = vertexCount;
+    this._nWhite  = nWhite;
+    this._nColour = colour.length / 8;
     this._ready   = true;
   }
 
@@ -122,8 +232,9 @@ class Transcend {
 
     this._grid.draw();
 
-    // Camera: start 20× zoomed in, slowly pull back over 40s
-    const zoom = 1/50 + (1 - 1/50) * Math.min(st / 1000, 1.0);
+    const zoomTime = 100;
+    const initialZoom = 1/20; // 1/500
+    const zoom = initialZoom + (1 - initialZoom) * Math.min(st / zoomTime, 1.0);
     const camX = PIVOT[0];
     const camY = PIVOT[1] + 0.5 * zoom;
     const camZ = PIVOT[2] + 3.5 * zoom;
@@ -153,31 +264,84 @@ class Transcend {
     const mvp   = mat4mul(proj, mat4mul(view, model));
     const focal = (this._FH / 2) / Math.tan(FOV / 2);
 
+    // Cycle render mode every second: 0=full, 1=white only, 2=colour only
+    const mode = 0;//Math.floor(st) % 3;
+
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
 
-    gl.useProgram(this._ptProg);
-    gl.uniformMatrix4fv(this._ptUMVP,   false, mvp);
-    gl.uniform1f(this._ptUFocal, focal);
-    gl.uniform1f(this._ptUAlpha, 0.15);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this._vbo);
-    gl.enableVertexAttribArray(this._ptAPos);
-    gl.enableVertexAttribArray(this._ptACol);
-    gl.enableVertexAttribArray(this._ptAScale);
-    gl.enableVertexAttribArray(this._ptAOpacity);
-    gl.vertexAttribPointer(this._ptAPos,     3, gl.FLOAT, false, 32, 0);
-    gl.vertexAttribPointer(this._ptACol,     3, gl.FLOAT, false, 32, 12);
-    gl.vertexAttribPointer(this._ptAScale,   1, gl.FLOAT, false, 32, 24);
-    gl.vertexAttribPointer(this._ptAOpacity, 1, gl.FLOAT, false, 32, 28);
-    gl.drawArrays(gl.POINTS, 0, this._nPoints);
-    gl.disableVertexAttribArray(this._ptAPos);
-    gl.disableVertexAttribArray(this._ptACol);
-    gl.disableVertexAttribArray(this._ptAScale);
-    gl.disableVertexAttribArray(this._ptAOpacity);
+    // White (seed) points — animated shader with two parallel VBOs
+    if (mode !== 2) {
+      gl.useProgram(this._whiteProg);
+      gl.uniformMatrix4fv(this._wUMVP,  false, mvp);
+      gl.uniform1f(this._wUFocal, focal);
+      gl.uniform1f(this._wUAlpha, 0.15);
+      gl.uniform1f(this._wUAnimT, Math.max(0, st - 5));
+      gl.enableVertexAttribArray(this._wAPos);
+      gl.enableVertexAttribArray(this._wACol);
+      gl.enableVertexAttribArray(this._wAScale);
+      gl.enableVertexAttribArray(this._wAOpacity);
+      gl.enableVertexAttribArray(this._wADir);
+      gl.enableVertexAttribArray(this._wADelay);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._vbo);
+      gl.vertexAttribPointer(this._wAPos,     3, gl.FLOAT, false, 32, 0);
+      gl.vertexAttribPointer(this._wACol,     3, gl.FLOAT, false, 32, 12);
+      gl.vertexAttribPointer(this._wAScale,   1, gl.FLOAT, false, 32, 24);
+      gl.vertexAttribPointer(this._wAOpacity, 1, gl.FLOAT, false, 32, 28);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._animVbo);
+      gl.vertexAttribPointer(this._wADir,   3, gl.FLOAT, false, 16, 0);
+      gl.vertexAttribPointer(this._wADelay, 1, gl.FLOAT, false, 16, 12);
+      gl.drawArrays(gl.POINTS, 0, this._nWhite);
+      gl.disableVertexAttribArray(this._wAPos);
+      gl.disableVertexAttribArray(this._wACol);
+      gl.disableVertexAttribArray(this._wAScale);
+      gl.disableVertexAttribArray(this._wAOpacity);
+      gl.disableVertexAttribArray(this._wADir);
+      gl.disableVertexAttribArray(this._wADelay);
+    }
+
+    // Coloured (stem/structure) points — static shader
+    if (mode !== 1) {
+      gl.useProgram(this._ptProg);
+      gl.uniformMatrix4fv(this._ptUMVP,   false, mvp);
+      gl.uniform1f(this._ptUFocal, focal);
+      gl.uniform1f(this._ptUAlpha, 0.15);
+      gl.enableVertexAttribArray(this._ptAPos);
+      gl.enableVertexAttribArray(this._ptACol);
+      gl.enableVertexAttribArray(this._ptAScale);
+      gl.enableVertexAttribArray(this._ptAOpacity);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._vboColour);
+      gl.vertexAttribPointer(this._ptAPos,     3, gl.FLOAT, false, 32, 0);
+      gl.vertexAttribPointer(this._ptACol,     3, gl.FLOAT, false, 32, 12);
+      gl.vertexAttribPointer(this._ptAScale,   1, gl.FLOAT, false, 32, 24);
+      gl.vertexAttribPointer(this._ptAOpacity, 1, gl.FLOAT, false, 32, 28);
+      gl.drawArrays(gl.POINTS, 0, this._nColour);
+      gl.disableVertexAttribArray(this._ptAPos);
+      gl.disableVertexAttribArray(this._ptACol);
+      gl.disableVertexAttribArray(this._ptAScale);
+      gl.disableVertexAttribArray(this._ptAOpacity);
+    }
+
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
     gl.depthMask(true);
     gl.disable(gl.BLEND);
+
+    // Fade to black after 30s
+    const fadeAlpha = Math.min(Math.max((st - 30) / 5, 0), 1);
+    if (fadeAlpha > 0) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.useProgram(this._fadeProg);
+      gl.uniform1f(this._fadeUAlpha, fadeAlpha);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this._fadeVbo);
+      gl.enableVertexAttribArray(this._fadeAPos);
+      gl.vertexAttribPointer(this._fadeAPos, 2, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.disableVertexAttribArray(this._fadeAPos);
+      gl.bindBuffer(gl.ARRAY_BUFFER, null);
+      gl.disable(gl.BLEND);
+    }
   }
 }

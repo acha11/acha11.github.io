@@ -126,10 +126,10 @@ class HvNet {
     this._grid.draw();
     const { N, CAM_SPEED, SPACING, CLUTTER_N } = HvNet;
     const st     = Math.max(0, ts_s - this.t0);
-    // Speed ramps linearly from 0 → CAM_SPEED over 5 s; integrate for position
+    // Speed ramps from 20% → 100% of CAM_SPEED over 5 s; integrate for position
     const travelZ = st <= 5
-      ? CAM_SPEED * st * st / 10
-      : CAM_SPEED * (st - 2.5);
+      ? CAM_SPEED * (0.2 * st + 0.08 * st * st)
+      : CAM_SPEED * (st - 2.0);
     const camZ    = travelZ % SPACING;
     const oscFade = Math.min(st / 2.0, 1.0);
     const proj = mat4pers(52 * Math.PI / 180, this.aspect, 0.3, 600);

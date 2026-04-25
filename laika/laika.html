@@ -755,7 +755,7 @@
 
     // ── Earth wireframe (EARTH scene) ────────────────────────────────────────
 
-    const earth           = new Earth(gl, FW / FH);
+    const earth           = new Earth(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.EARTH).t);
     const earthSatellites = new EarthSatellites(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.EARTH_SATELLITES).t);
 
     // ── HV_NET: delta-mast transmission tower flyby ──────────────────────────

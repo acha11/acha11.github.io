@@ -1,11 +1,35 @@
 class Earth {
-  constructor(gl, aspect) {
+  constructor(gl, aspect, t0) {
     this.gl     = gl;
     this.aspect = aspect;
+    this.t0     = t0;
     this._stripLengths = [];
     this._initProgram();
+    this._initAxisProgram();
     this._grid = new CrtGrid(gl);
     this._vbo = gl.createBuffer();
+  }
+
+  _initAxisProgram() {
+    const gl = this.gl;
+    this._axisProg = createProgram(`
+      attribute vec3 a_pos;
+      uniform mat4 u_mvp;
+      void main() { gl_Position = u_mvp * vec4(a_pos, 1.0); }
+    `, `
+      precision mediump float;
+      void main() { gl_FragColor = vec4(0.25, 0.25, 0.25, 1.0); }
+    `);
+    this._axisUMVP = gl.getUniformLocation(this._axisProg, 'u_mvp');
+    this._axisAPos = gl.getAttribLocation(this._axisProg, 'a_pos');
+    this._axisVbo  = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._axisVbo);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+       0, -10,  0,   0,  10,  0,   // pole axis
+      -10,  0,  0,  10,   0,  0,   // Greenwich meridian (equator, 0° lon)
+       0,  0, -10,   0,   0, 10,   // 90° meridian
+    ]), gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
   _initProgram() {
@@ -35,15 +59,19 @@ class Earth {
   }
 
   draw(ts_s) {
-    const gl   = this.gl;
+    const gl    = this.gl;
     this._grid.draw();
-    const TILT = 23.44 * Math.PI / 180;
-    const R_spin = mat4axisAngle(0, 1, 0, ts_s * (2 * Math.PI / 120));
+    const st    = Math.max(0, ts_s - this.t0);
+    const p     = Math.min(st / 15, 1.0);
+    const ease  = p * p * (3 - 2 * p);
+    const phase = st + 42; // phase=42 at st=0 preserves initial state from schedule t=42
+    const TILT  = 23.44 * Math.PI / 180;
+    const R_spin = mat4axisAngle(0, 1, 0, phase * (2 * Math.PI / 120));
     const R_tilt = mat4axisAngle(0, 0, 1, -TILT);
     const model  = mat4mul(R_tilt, R_spin);
     model[0]=-model[0]; model[1]=-model[1]; model[2]=-model[2]; model[3]=-model[3];
-    const camAngle = ts_s * 0.12;
-    const camDist  = 5.2, camElev = 0.35;
+    const camAngle = phase * 0.12;
+    const camDist  = 5.2, camElev = 0.35 - 0.70 * ease;
     const ex = Math.cos(camAngle) * Math.cos(camElev) * camDist;
     const ey = Math.sin(camElev) * camDist;
     const ez = Math.sin(camAngle) * Math.cos(camElev) * camDist;
@@ -61,6 +89,15 @@ class Earth {
       byteOff += count * 12;
     }
     gl.disableVertexAttribArray(this._aPos);
+
+    // Rotation axis line — (0,±5,0) in mesh space, tilted by MVP
+    gl.useProgram(this._axisProg);
+    gl.uniformMatrix4fv(this._axisUMVP, false, mvp);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this._axisVbo);
+    gl.enableVertexAttribArray(this._axisAPos);
+    gl.vertexAttribPointer(this._axisAPos, 3, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.LINES, 0, 6);
+    gl.disableVertexAttribArray(this._axisAPos);
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 }
