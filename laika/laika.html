@@ -47,12 +47,13 @@
     const FW = 640, FH = 480;
 
     function fitCanvas() {
+      const dpr   = window.devicePixelRatio || 1;
       const scale = Math.min(window.innerWidth / FW, window.innerHeight / FH);
-      const w = Math.round(FW * scale), h = Math.round(FH * scale);
-      canvas.width  = w;
-      canvas.height = h;
-      wrapper.style.width  = w + 'px';
-      wrapper.style.height = h + 'px';
+      const cssW  = Math.round(FW * scale), cssH = Math.round(FH * scale);
+      canvas.width  = Math.round(cssW * dpr);
+      canvas.height = Math.round(cssH * dpr);
+      wrapper.style.width  = cssW + 'px';
+      wrapper.style.height = cssH + 'px';
     }
     fitCanvas();
     window.addEventListener('resize', fitCanvas);
