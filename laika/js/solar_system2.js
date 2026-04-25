@@ -13,8 +13,11 @@ class SolarSystem2 {
   static SUN_R          = 0.36;
   static SUN_N          = 32;
 
-  constructor(gl, FW, FH) {
-    this.gl = gl;
+  constructor(gl, FW, FH, t0 = 0) {
+    this.gl            = gl;
+    this.t0            = t0;
+    this._activationTs = t0;
+    this._timeOffset   = 0;
     const PLUTO = SolarSystem.PLANETS[8];
     const MAX_D = Math.sqrt(PLUTO.a) * (1 + PLUTO.e);
     this._SY = 0.9 / MAX_D;
@@ -106,16 +109,26 @@ class SolarSystem2 {
     ]);
   }
 
+  activate(ts_s, params = {}) {
+    this._activationTs = ts_s;
+    this._timeOffset   = params.timeOffset ?? 0;
+  }
+
+  getSt(ts_s) {
+    return this._timeOffset + Math.max(0, ts_s - this._activationTs);
+  }
+
   draw(ts_s) {
     const gl = this.gl;
     const { T0, TIME_SCALE, ORBIT_N, GAP, SUN_N } = SolarSystem2;
 
-    const t    = T0 + ts_s * TIME_SCALE;
-    const th   = this._camTheta(ts_s);
+    const st   = this.getSt(ts_s);
+    const t    = T0 + st * TIME_SCALE;
+    const th   = this._camTheta(st);
     const cTh  = Math.cos(th), sTh = Math.sin(th);
-    const phi  = ts_s * (2 * Math.PI / SolarSystem2.CAM_AZ_PERIOD);
+    const phi  = st * (2 * Math.PI / SolarSystem2.CAM_AZ_PERIOD);
     const cPhi = Math.cos(phi), sPhi = Math.sin(phi);
-    const zoom = this._camZoom(ts_s);
+    const zoom = this._camZoom(st);
     const sx   = this._SX * zoom;
     const sy   = this._SY * zoom;
 

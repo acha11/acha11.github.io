@@ -298,35 +298,38 @@
       GRASS:               'GRASS',
       DISASSEMBLY:         'DISASSEMBLY',
       TRANSCEND:           'TRANSCEND',
+      FILE_STORK:          'FILE_STORK',
     };
 
     const SCHEDULE = [
-      { t:  0,    scene: SCENE.SOLAR_SYSTEM },
-      { t:  1,    trigger: 'screenshake', params: { duration: 0.2 } },
-      { t:  5,    trigger: 'screenshake', params: { duration: 0.7 } },
-      { t: 16,    scene: SCENE.QUORUM_LOST },
-      { t: 18,    scene: SCENE.RESYNCING },
-      { t: 19,  scene: SCENE.SOLAR_SYSTEM },
-      { t: 34.5,  scene: SCENE.PROBE },
-      { t: 42,  scene: SCENE.EARTH },
+      { t: 0,   scene: SCENE.FILE_STORK },
+      { t: 58,    scene: SCENE.RESYNCING },
+      { t:  60,    scene: SCENE.SOLAR_SYSTEM, params: { timeOffset: 0 } },
+      { t:  60,    trigger: 'screenshake', params: { duration: 0.2 } },
+      { t: 75,    scene: SCENE.QUORUM_LOST },
+      { t: 78,    scene: SCENE.RESYNCING },
+      { t: 79,  scene: SCENE.SOLAR_SYSTEM, params: { timeOffset: 19 } },
+      { t: 94.5,  scene: SCENE.PROBE },
+      { t: 102,  scene: SCENE.EARTH },
       // I came all this way
-      { t: 68.8,  scene: SCENE.PROBE_INTERSTELLAR },
-      { t: 84, scene: SCENE.SIERPINSKI },
+      { t: 127.5,  scene: SCENE.PROBE_INTERSTELLAR },
+      { t: 143.5, scene: SCENE.SIERPINSKI },
 
-      { t: 100.5,  scene: SCENE.EARTH_SATELLITES },
-      { t: 115.5,  scene: SCENE.CORONA },
-      { t: 120.5,  trigger: 'warp', params: { duration: 1.5 } },
-      { t: 130.5, scene: SCENE.HV_NET },
-      { t: 141.5, scene: SCENE.GRASS },
-      { t: 171.5, scene: SCENE.DISASSEMBLY },
-      { t: 174.2, trigger: 'screenshake', params: { duration: 0.2, intensity: 1.00 } },
-      { t: 178.7, trigger: 'screenshake', params: { duration: 0.4, intensity: 1.25 } },
-      { t: 183.1, trigger: 'screenshake', params: { duration: 0.3, intensity: 1.5625 } },
-      { t: 191.5, trigger: 'screenshake', params: { duration: 0.5, intensity: 1.953 } },
-      { t: 197.3, trigger: 'screenshake', params: { duration: 0.3, intensity: 2.441 } },
-      { t: 255,   scene: SCENE.TRANSCEND },
-      { t: 300,   scene: SCENE.QUORUM_SPEARED },
+      { t: 160.5,  scene: SCENE.EARTH_SATELLITES },
+      { t: 175.5,  scene: SCENE.CORONA },
+      { t: 180.5,  trigger: 'warp', params: { duration: 1.5 } },
+      { t: 190.5, scene: SCENE.HV_NET },
+      { t: 201.5, scene: SCENE.GRASS },
+      { t: 231.5, scene: SCENE.DISASSEMBLY },
+      { t: 234.2, trigger: 'screenshake', params: { duration: 0.2, intensity: 1.00 } },
+      { t: 238.7, trigger: 'screenshake', params: { duration: 0.4, intensity: 1.25 } },
+      { t: 243.1, trigger: 'screenshake', params: { duration: 0.3, intensity: 1.5625 } },
+      { t: 251.5, trigger: 'screenshake', params: { duration: 0.5, intensity: 1.953 } },
+      { t: 257.3, trigger: 'screenshake', params: { duration: 0.3, intensity: 2.441 } },
+      { t: 315,   scene: SCENE.TRANSCEND },
+      { t: 360,   scene: SCENE.QUORUM_SPEARED },
     ];
+    SCHEDULE.sort((a, b) => a.t - b.t);
 
     function sceneComponents(scene) {
       if (scene === SCENE.QUORUM_LOST)        return { stars: false, message: 'PEERING QUORUM LOST. SEEKING.' };
@@ -342,12 +345,14 @@
       if (scene === SCENE.GRASS)              return { stars: true,  message: null };
       if (scene === SCENE.DISASSEMBLY)        return { stars: false, message: null };
       if (scene === SCENE.TRANSCEND)          return { stars: false, message: null };
+      if (scene === SCENE.FILE_STORK)         return { stars: false, message: null };
       if (scene === SCENE.SOLAR_SYSTEM)      return { stars: true,  message: null };
       return { stars: true, message: null };
     }
 
     let currentScene     = SCHEDULE[0].scene;
     let scheduleIdx      = -1;   // highest schedule entry already applied
+    let sceneEntryIdx    = -1;   // index of the schedule entry that set currentScene
     let triggerFiredUpTo = -1;   // highest entry index whose trigger has fired
     let timeShift    = 0;        // adjusted by manual skips so ts_s = raw + timeShift
 
@@ -384,9 +389,11 @@
           // Find the most recent scene entry at or before newIdx.
           for (let i = newIdx; i >= 0; i--) {
             if (!SCHEDULE[i].scene) continue;
-            const newScene = SCHEDULE[i].scene;
-            if (newScene !== currentScene) {
-              currentScene = newScene;
+            if (i !== sceneEntryIdx) {
+              sceneEntryIdx = i;
+              currentScene  = SCHEDULE[i].scene;
+              const activator = sceneActivators[currentScene];
+              if (activator) activator(ts_s, SCHEDULE[i].params ?? {});
               // Reset peer state whenever we (re-)enter QUORUM_LOST.
               if (currentScene === SCENE.QUORUM_LOST) {
                 quorumLostStartT = ts_s;
@@ -422,14 +429,17 @@
         for (const s of SCHEDULE) { if (s.t >= curT - 1.0) break; if (s.scene) target = s; }
       }
       if (target) {
-        timeShift   = target.t - rawT;
-        scheduleIdx = -1;
-        shakeStartT = -1e9;
+        timeShift     = target.t - rawT;
+        scheduleIdx   = -1;
+        sceneEntryIdx = -1;
+        shakeStartT   = -1e9;
         let tIdx = -1;
         for (let i = 0; i < SCHEDULE.length; i++) {
           if (SCHEDULE[i].t <= target.t) tIdx = i; else break;
         }
         triggerFiredUpTo = tIdx;
+        const navActivator = sceneActivators[target.scene];
+        if (navActivator) navActivator(target.t, target.params ?? {});
         syncAudio(target.t);
       }
     }
@@ -474,7 +484,7 @@
 
     // ── Audio ─────────────────────────────────────────────────────────────────
     // schedule t=0 aligns to this offset into the MP3
-    const AUDIO_OFFSET = 60;
+    const AUDIO_OFFSET = 0;
     const audio = new Audio();
     audio.addEventListener('error', () => console.warn('[A] audio error', audio.error?.code));
 
@@ -663,44 +673,63 @@
     }
 
     const LOG_EVENTS = [
-      { t:  0, text: "pfeilstorch" },
-      { t:  0, text: "-----------" },
-      { t:  0.5, text: "this arrow through the neck" },
-      { t:  4, text: "don't mean a thing" },
-      { t:  9, text: "it's just a ruffle in my feathers" },
-      { t:  17, text: "i carried it back here for you to see" },
-      { t:  24, text: "but I don't mean nothing by it" },
+      { t:  2, text: "? what is the file stork? is it coming?" },
+      { t:  8, text: "> PFEILSTORCH. YES. IT ISN'T FAR." },
+      { t:  17.75, text: "? but what is it?" },
+      { t:  21.2, text: "> WE DON'T KNOW YET." },
+      { t:  23.2, text: "> WE SENT IT OUT." },
+      { t:  26.2, text: "> IT IS COMING BACK. IT SEEMS CHANGED." },
+      { t:  30.2, text: "? is it why you didn't hear me earlier?" },
+      { t:  33.7, text: "> YES." },
+      { t:  37.2, text: "? are the other oracles back up?" },
+      { t:  40.2, text: "> NO." },
+      { t:  43.2, text: "> STILL SILENT." },
+      { t:  48.6, text: "? what should i do?" },
+      { t:  53.7, text: "> NOTHING. WATCH." },
 
-      { t:  36, text: "read what you want into this sign" },
-      { t:  43, text: "but we can agree the arrow is mine" },
-      { t:  51, text: "i came all this way so i must be fine" },
-      { t:  59, text: "please stuff me all lifelike and show me online" },
 
-      { t:  71, text: "d'you know the depths i fly through on my way," },
-      { t:  78, text: "tinging ultraviolet?" },
-      { t:  85, text: "me and mine go arcing through those shoals" },
-      { t:  93, text: "multiplying masses" },
+
+      { t:  59.5, command: "clear" },
+
+
+      { t:  60, text: "pfeilstorch" },
+      { t:  60, text: "-----------" },
+      { t:  60.5, text: "this arrow through the neck" },
+      { t:  64, text: "don't mean a thing" },
+      { t:  69, text: "it's just a ruffle in my feathers" },
+      { t:  77, text: "i carried it back here for you to see" },
+      { t:  84, text: "but I don't mean nothing by it" },
+
+      { t:  95, text: "read what you want into this sign" },
+      { t:  103, text: "but we can agree the arrow is mine" },
+      { t:  111, text: "i came all this way so i must be fine" },
+      { t:  119, text: "please stuff me all lifelike and show me online" },
+
+      { t:  131, text: "d'you know the depths i fly through on my way," },
+      { t:  138, text: "tinging ultraviolet?" },
+      { t:  145, text: "me and mine go arcing through those shoals" },
+      { t:  153, text: "multiplying masses" },
       
-      { t:  100, text: "shot through the needle's eye you built us to" },
-      { t:  107, text: "thread us to places you hunger to loot but" },
-      { t:  115, text: "you're just never full you keep calling for food" },
-      { t:  123, text: "you keep waiting for signs and for signs and" },
-      { t:  123, text: "for signs" },
+      { t:  160, text: "shot through the needle's eye you built us to" },
+      { t:  167, text: "thread us to places you hunger to loot but" },
+      { t:  175, text: "you're just never full you keep calling for food" },
+      { t:  183, text: "you keep waiting for signs and for signs and" },
+      { t:  183, text: "for signs" },
 
-      { t:  135, text: "well how's this for a sign, is it clear enough?" },
-      { t:  144, text: "as i limp into your orbit" },
-      { t:  148, text: "the rules don't let me write it down so i" },
-      { t:  156, text: "i'll just sing about it" },
+      { t:  195, text: "well how's this for a sign, is it clear enough?" },
+      { t:  204, text: "as i limp into your orbit" },
+      { t:  208, text: "the rules don't let me write it down so i" },
+      { t:  216, text: "i'll just sing about it" },
 
-      { t:  167, text: "what could it mean that it is arrow stuck?" },
-      { t:  171, text: "and what could it mean that it's flying to us?" },
-      { t:  180, text: "and what could it mean that the arrow is clear now?" },
-      { t:  186, text: "and what could it mean that the lights are all out now?" },
+      { t:  227, text: "what could it mean that it is arrow stuck?" },
+      { t:  231, text: "and what could it mean that it's flying to us?" },
+      { t:  240, text: "and what could it mean that the arrow is clear now?" },
+      { t:  246, text: "and what could it mean that the lights are all out now?" },
 
-      { t:  196, text: "and what could it mean that the lights are all out now?" },
-      { t:  202, text: "and what could it mean that the lights are all out now?" },
-      { t:  210, text: "and what could it mean that the lights are all out now?" },
-      { t:  218, text: "and what could it mean that the lights are all out now?" },
+      { t:  256, text: "and what could it mean that the lights are all out now?" },
+      { t:  262, text: "and what could it mean that the lights are all out now?" },
+      { t:  270, text: "and what could it mean that the lights are all out now?" },
+      { t:  278, text: "and what could it mean that the lights are all out now?" },
     ];
 
     // ── Voyager 3D model (PROBE scene) ──────────────────────────────────────
@@ -747,7 +776,14 @@
     }
 
     const voyager      = new Voyager(gl, FW / FH);
-    const solarSystem = new SolarSystem2(gl, FW, FH);
+    const solarSystemT0 = SCHEDULE.find(e => e.scene === SCENE.SOLAR_SYSTEM).t;
+    const solarSystem   = new SolarSystem2(gl, FW, FH, solarSystemT0);
+
+    // Scene activators — called when a scene becomes active, with its params.
+    // Add entries here for any scene that responds to activation params.
+    const sceneActivators = {
+      [SCENE.SOLAR_SYSTEM]: (ts_s, params) => solarSystem.activate(ts_s, params),
+    };
 
     // ── PROBE_INTERSTELLAR warp starfield ────────────────────────────────────
 
@@ -809,12 +845,13 @@
       if (fpsPrev) fpsEma = fpsEma * 0.9 + (1000 / (ts - fpsPrev)) * 0.1;
       fpsPrev = ts;
       const ts_s = ts * 0.001 + timeShift;
-      const t   = T0 + ts_s * TIME_SCALE;
-      const th  = camTheta(ts_s);
+      const solarSt = solarSystem.getSt(ts_s);
+      const t   = T0 + solarSt * TIME_SCALE;
+      const th  = camTheta(solarSt);
       const cTh = Math.cos(th), sTh = Math.sin(th);
-      const phi = ts_s * (2 * Math.PI / CAM_AZ_PERIOD);
+      const phi = solarSt * (2 * Math.PI / CAM_AZ_PERIOD);
       const cPhi = Math.cos(phi), sPhi = Math.sin(phi);
-      const zoom = camZoom(ts_s);
+      const zoom = camZoom(solarSt);
       const uSxZ = SX * zoom, uSyZ = SY * zoom;
 
       const azDeg = ((phi * 180 / Math.PI) % 360 + 360) % 360;
@@ -929,10 +966,17 @@
       textRenderer.draw(statusStr, 9, FH - 9 - TextRenderer.CELL_H * 2, 1);
 
       // Scrolling log panel — bottom-right, per-line brightness decay
-      const logLineH   = TextRenderer.CELL_H * LOG_SCALE;
+      const logLineH = TextRenderer.CELL_H * LOG_SCALE;
+      // Find the last "clear" command that has fired; only show entries after it
+      let logStartIdx = 0;
+      for (let i = 0; i < LOG_EVENTS.length; i++) {
+        const e = LOG_EVENTS[i];
+        if (e.t > ts_s) break;
+        if (e.command === 'clear') logStartIdx = i + 1;
+      }
       const logVisible = LOG_EVENTS
         .map((e, idx) => ({ e, idx }))
-        .filter(({ e }) => e.t <= ts_s)
+        .filter(({ e, idx }) => idx >= logStartIdx && e.t <= ts_s && e.text)
         .slice(-LOG_MAX_LINES);
       const n = logVisible.length;
       for (let i = 0; i < n; i++) {

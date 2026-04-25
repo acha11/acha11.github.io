@@ -1,5 +1,5 @@
 class CrtGrid {
-  constructor(gl) {
+  constructor(gl, insetPx = 6) {
     this.gl = gl;
     const prog = createProgram(`
       attribute vec2 a_pos;
@@ -11,10 +11,14 @@ class CrtGrid {
     this._prog = prog;
     this._aPos = gl.getAttribLocation(prog, 'a_pos');
 
-    // 8 cols × 6 rows — square cells on a 4:3 canvas
+    // 8 cols × 6 rows — square cells on a 4:3 canvas, inset from edges
+    // FBO is always 640×480: half-width=320, half-height=240
+    const xi = insetPx / 320, yi = insetPx / 240;
+    const x0 = -1 + xi, x1 = 1 - xi;
+    const y0 = -1 + yi, y1 = 1 - yi;
     const verts = [];
-    for (let c = 0; c <= 8; c++) { const x = -1 + c * 0.25;    verts.push(x, -1, x,  1); }
-    for (let r = 0; r <= 6; r++) { const y = -1 + r * (2 / 6); verts.push(-1, y,  1, y); }
+    for (let c = 0; c <= 8; c++) { const x = x0 + c * (x1 - x0) / 8; verts.push(x, y0, x, y1); }
+    for (let r = 0; r <= 6; r++) { const y = y0 + r * (y1 - y0) / 6; verts.push(x0, y, x1, y); }
     this._vbo = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this._vbo);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
