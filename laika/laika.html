@@ -50,8 +50,10 @@
       const dpr   = window.devicePixelRatio || 1;
       const scale = Math.min(window.innerWidth / FW, window.innerHeight / FH);
       const cssW  = Math.round(FW * scale), cssH = Math.round(FH * scale);
-      canvas.width  = Math.round(cssW * dpr);
-      canvas.height = Math.round(cssH * dpr);
+      canvas.width        = Math.round(cssW * dpr);
+      canvas.height       = Math.round(cssH * dpr);
+      canvas.style.width  = cssW + 'px';
+      canvas.style.height = cssH + 'px';
       wrapper.style.width  = cssW + 'px';
       wrapper.style.height = cssH + 'px';
     }
