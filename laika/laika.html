@@ -334,8 +334,17 @@
       { t: 251.5, trigger: 'screenshake', params: { duration: 0.5, intensity: 1.953 } },
       { t: 257.3, trigger: 'screenshake', params: { duration: 0.3, intensity: 2.441 } },
       { t: 290, scene: SCENE.ON_THE_BEACH },
+      { t: 291.44, trigger: 'screenshake', params: { duration: 0.2, intensity: 1.00 } },
+      { t: 294.0, trigger: 'screenshake', params: { duration: 0.2, intensity: 1.00 } },
+      { t: 296.6, trigger: 'screenshake', params: { duration: 0.2, intensity: 1.00 } },
       { t: 300,   scene: SCENE.TRANSCEND },
-      { t: 336,   scene: SCENE.ON_THE_BEACH, params: { fade_in: 10.0 } },
+      { t: 301.8, trigger: 'screenshake', params: { duration: 0.2, intensity: 1.00 } },
+      { t: 304.45, trigger: 'screenshake', params: { duration: 0.2, intensity: 1.00 } },
+      { t: 307, trigger: 'screenshake', params: { duration: 0.2, intensity: 1.00 } },
+      { t: 309.6, trigger: 'screenshake', params: { duration: 0.2, intensity: 1.00 } },
+      { t: 312.2, trigger: 'screenshake', params: { duration: 0.2, intensity: 1.00 } },
+      { t: 314.75, trigger: 'screenshake', params: { duration: 0.2, intensity: 1.00 } },
+      { t: 336,   scene: SCENE.ON_THE_BEACH, params: { fade_in: 10.0, wire_in: [20, 40], wire_out: [50, 70] } },
       { t: 430,   scene: SCENE.QUORUM_SPEARED },
     ];
     SCHEDULE.sort((a, b) => a.t - b.t);

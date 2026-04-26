@@ -88,6 +88,28 @@ class Waves {
     this._uLight = gl.getUniformLocation(this._prog, 'u_light');
     this._uCam   = gl.getUniformLocation(this._prog, 'u_cam');
     this._aUV    = gl.getAttribLocation(this._prog, 'a_uv');
+
+    // Wireframe overlay — same vertex shader, flat dim colour (reuses W, f, GS, wH from above)
+    this._wireProg = createProgram(`
+      precision mediump float;
+      attribute vec2 a_uv;
+      uniform mat4 u_mvp;
+      uniform float u_time;
+      void main() {
+        float x = (a_uv.x - 0.5) * ${GS};
+        float z = (a_uv.y - 0.5) * ${GS};
+        float h = ${W.map(wH).join(' + ')};
+        gl_Position = u_mvp * vec4(x, h, z, 1.0);
+      }
+    `, `
+      precision mediump float;
+      uniform float u_intensity;
+      void main() { gl_FragColor = vec4(0.6, 0.6, 0.6, u_intensity); }
+    `);
+    this._wireUMVP       = gl.getUniformLocation(this._wireProg, 'u_mvp');
+    this._wireUTime      = gl.getUniformLocation(this._wireProg, 'u_time');
+    this._wireUIntensity = gl.getUniformLocation(this._wireProg, 'u_intensity');
+    this._wireAUV        = gl.getAttribLocation(this._wireProg, 'a_uv');
   }
 
   _initGeometry() {
@@ -118,16 +140,32 @@ class Waves {
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
     this._idxCount = idx.length;
+
+    // Wireframe: horizontal + vertical line segments
+    const wIdx = new Uint16Array(2 * N * (N-1) * 2);
+    let q = 0;
+    for (let r = 0; r < N; r++)
+      for (let c = 0; c < N-1; c++) { wIdx[q++] = r*N+c; wIdx[q++] = r*N+c+1; }
+    for (let c = 0; c < N; c++)
+      for (let r = 0; r < N-1; r++) { wIdx[q++] = r*N+c; wIdx[q++] = (r+1)*N+c; }
+    this._wireIbo      = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this._wireIbo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, wIdx, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+    this._wireIdxCount = wIdx.length;
   }
 
   // Draw the wave surface. st = scene-local time. Camera and light in world space.
-  draw(st, ex, ey, ez, lx, ly, lz) {
+  // wireIntensity: 0 = hidden, 1 = full 0.6 grey.
+  draw(st, ex, ey, ez, lx, ly, lz, wireIntensity = 1) {
     const gl = this.gl;
     const proj = mat4pers(Waves.FOV, this.aspect, 0.01, 50);
     const view = mat4look(ex, ey, ez,  0, 0, 0,  0, 1, 0);
     const mvp  = mat4mul(proj, view);
 
     gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(1, 1);
     gl.useProgram(this._prog);
     gl.uniformMatrix4fv(this._uMVP,   false, mvp);
     gl.uniform1f(this._uTime,  st);
@@ -138,7 +176,22 @@ class Waves {
     gl.vertexAttribPointer(this._aUV, 2, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this._ibo);
     gl.drawElements(gl.TRIANGLES, this._idxCount, gl.UNSIGNED_SHORT, 0);
-    gl.disableVertexAttribArray(this._aUV);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+
+    // Wireframe overlay
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(this._wireProg);
+    gl.uniformMatrix4fv(this._wireUMVP,  false, mvp);
+    gl.uniform1f(this._wireUTime,      st);
+    gl.uniform1f(this._wireUIntensity, wireIntensity);
+    gl.enableVertexAttribArray(this._wireAUV);
+    gl.vertexAttribPointer(this._wireAUV, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this._wireIbo);
+    gl.drawElements(gl.LINES, this._wireIdxCount, gl.UNSIGNED_SHORT, 0);
+    gl.disableVertexAttribArray(this._wireAUV);
+    gl.disable(gl.BLEND);
+
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
     gl.disable(gl.DEPTH_TEST);

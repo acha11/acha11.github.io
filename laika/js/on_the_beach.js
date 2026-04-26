@@ -29,6 +29,8 @@ class OnTheBeach {
 
   activate(ts_s, params = {}) {
     this._fadeIn       = params.fade_in ?? 0;
+    this._wireIn       = params.wire_in  ?? null;
+    this._wireOut      = params.wire_out ?? null;
     this._activationTs = ts_s;
   }
 
@@ -42,9 +44,11 @@ class OnTheBeach {
     const angle = st * CAM_SPEED;
     const ex = CAM_R * Math.sin(angle);
     const ez = CAM_R * Math.cos(angle);
-    this._waves.draw(st, ex, CAM_Y, ez, -ex * 1.8, 1.0, -ez * 1.8);
-
     const sinceActivation = Math.max(0, ts_s - (this._activationTs ?? this.t0));
+    let wireIntensity = 0;
+    if (this._wireIn)  wireIntensity = Math.max(wireIntensity, Math.min(1, (sinceActivation - this._wireIn[0])  / (this._wireIn[1]  - this._wireIn[0])));
+    if (this._wireOut) wireIntensity = Math.min(wireIntensity, Math.max(0, 1 - (sinceActivation - this._wireOut[0]) / (this._wireOut[1] - this._wireOut[0])));
+    this._waves.draw(st, ex, CAM_Y, ez, -ex * 1.8, 1.0, -ez * 1.8, wireIntensity);
     const fadeAlpha = this._fadeIn > 0 ? Math.max(0, 1 - sinceActivation / this._fadeIn) : 0;
     if (fadeAlpha > 0) {
       gl.enable(gl.BLEND);

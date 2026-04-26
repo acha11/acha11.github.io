@@ -36,7 +36,8 @@ class FileStork {
     const angle = st * CAM_SPEED;
     const ex = CAM_R * Math.sin(angle);
     const ez = CAM_R * Math.cos(angle);
-    this._waves.draw(st, ex, CAM_Y, ez, -ex * 1.8, 1.0, -ez * 1.8);
+    const wireIntensity = Math.max(0, 1 - Math.max(0, st - 10) / 10);
+    this._waves.draw(st, ex, CAM_Y, ez, -ex * 1.8, 1.0, -ez * 1.8, wireIntensity);
 
     const fadeAlpha = Math.max(0, 1 - st / 10);
     if (fadeAlpha > 0) {
