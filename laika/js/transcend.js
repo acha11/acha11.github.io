@@ -232,8 +232,8 @@ class Transcend {
 
     this._grid.draw();
 
-    const zoomTime = 100;
-    const initialZoom = 1/20; // 1/500
+    const zoomTime = 400;
+    const initialZoom = 1/80; // 1/500
     const zoom = initialZoom + (1 - initialZoom) * Math.min(st / zoomTime, 1.0);
     const camX = PIVOT[0];
     const camY = PIVOT[1] + 0.5 * zoom;
@@ -277,7 +277,7 @@ class Transcend {
       gl.uniformMatrix4fv(this._wUMVP,  false, mvp);
       gl.uniform1f(this._wUFocal, focal);
       gl.uniform1f(this._wUAlpha, 0.15);
-      gl.uniform1f(this._wUAnimT, Math.max(0, st - 5));
+      gl.uniform1f(this._wUAnimT, Math.max(0, st - 15));
       gl.enableVertexAttribArray(this._wAPos);
       gl.enableVertexAttribArray(this._wACol);
       gl.enableVertexAttribArray(this._wAScale);

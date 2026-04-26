@@ -28,6 +28,9 @@
   <script src="js/grass.js"></script>
   <script src="js/disassembly.js"></script>
   <script src="js/transcend.js"></script>
+  <script src="js/waves.js"></script>
+  <script src="js/on_the_beach.js"></script>
+  <script src="js/file_stork.js"></script>
   <script src="js/text_renderer.js"></script>
 </head>
 <body>
@@ -302,6 +305,7 @@
       DISASSEMBLY:         'DISASSEMBLY',
       TRANSCEND:           'TRANSCEND',
       FILE_STORK:          'FILE_STORK',
+      ON_THE_BEACH:        'ON_THE_BEACH',
     };
 
     const SCHEDULE = [
@@ -329,8 +333,10 @@
       { t: 243.1, trigger: 'screenshake', params: { duration: 0.3, intensity: 1.5625 } },
       { t: 251.5, trigger: 'screenshake', params: { duration: 0.5, intensity: 1.953 } },
       { t: 257.3, trigger: 'screenshake', params: { duration: 0.3, intensity: 2.441 } },
-      { t: 315,   scene: SCENE.TRANSCEND },
-      { t: 360,   scene: SCENE.QUORUM_SPEARED },
+      { t: 290, scene: SCENE.ON_THE_BEACH },
+      { t: 300,   scene: SCENE.TRANSCEND },
+      { t: 336,   scene: SCENE.ON_THE_BEACH, params: { fade_in: 10.0 } },
+      { t: 430,   scene: SCENE.QUORUM_SPEARED },
     ];
     SCHEDULE.sort((a, b) => a.t - b.t);
 
@@ -348,7 +354,8 @@
       if (scene === SCENE.GRASS)              return { stars: true,  message: null };
       if (scene === SCENE.DISASSEMBLY)        return { stars: false, message: null };
       if (scene === SCENE.TRANSCEND)          return { stars: false, message: null };
-      if (scene === SCENE.FILE_STORK)         return { stars: false, message: null };
+      if (scene === SCENE.FILE_STORK)         return { stars: true,  message: null };
+      if (scene === SCENE.ON_THE_BEACH)       return { stars: true,  message: null };
       if (scene === SCENE.SOLAR_SYSTEM)      return { stars: true,  message: null };
       return { stars: true, message: null };
     }
@@ -786,6 +793,7 @@
     // Add entries here for any scene that responds to activation params.
     const sceneActivators = {
       [SCENE.SOLAR_SYSTEM]: (ts_s, params) => solarSystem.activate(ts_s, params),
+      [SCENE.ON_THE_BEACH]: (ts_s, params) => onTheBeach.activate(ts_s, params),
     };
 
     // ── PROBE_INTERSTELLAR warp starfield ────────────────────────────────────
@@ -812,6 +820,8 @@
     const grass        = new Grass(gl, FW / FH, SCHEDULE.find(e => e.scene === SCENE.GRASS).t);
     const disassemblyT0 = SCHEDULE.find(e => e.scene === SCENE.DISASSEMBLY).t;
     const transcend     = new Transcend(gl, FW, FH, SCHEDULE.find(e => e.scene === SCENE.TRANSCEND).t);
+    const onTheBeach    = new OnTheBeach(gl, FW, FH, SCHEDULE.find(e => e.scene === SCENE.ON_THE_BEACH)?.t ?? 0);
+    const fileStork     = new FileStork(gl, FW, FH, SCHEDULE.find(e => e.scene === SCENE.FILE_STORK)?.t ?? 0);
     const triggers = {
       screenshake: (params, ts_s) => trigger_screenshake(params, ts_s),
     };
@@ -919,6 +929,8 @@
       if (activeScene === SCENE.GRASS)        grass.draw(ts_s);
       if (activeScene === SCENE.DISASSEMBLY)  disassembly.draw(ts_s);
       if (activeScene === SCENE.TRANSCEND)    transcend.draw(ts_s);
+      if (activeScene === SCENE.ON_THE_BEACH) onTheBeach.draw(ts_s);
+      if (activeScene === SCENE.FILE_STORK)   fileStork.draw(ts_s);
 
       // Pie chart — top-right, drawn in clip space
       const pieShrinkStart = 2;
