@@ -268,6 +268,7 @@ class Transcend {
     const mode = 0;//Math.floor(st) % 3;
 
     gl.enable(gl.BLEND);
+    // ajc: can change to gl.ONE to get additive to intensify white
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
 
@@ -276,7 +277,8 @@ class Transcend {
       gl.useProgram(this._whiteProg);
       gl.uniformMatrix4fv(this._wUMVP,  false, mvp);
       gl.uniform1f(this._wUFocal, focal);
-      gl.uniform1f(this._wUAlpha, 0.15);
+      // AJC -  tweak for dandelion intensity - originally 0.15, increased to 0.4 to get more white
+      gl.uniform1f(this._wUAlpha, 0.5);
       gl.uniform1f(this._wUAnimT, Math.max(0, st - 15));
       gl.enableVertexAttribArray(this._wAPos);
       gl.enableVertexAttribArray(this._wACol);
@@ -306,6 +308,8 @@ class Transcend {
       gl.useProgram(this._ptProg);
       gl.uniformMatrix4fv(this._ptUMVP,   false, mvp);
       gl.uniform1f(this._ptUFocal, focal);
+
+      // ajc: should fade this up during the blow away effect
       gl.uniform1f(this._ptUAlpha, 0.15);
       gl.enableVertexAttribArray(this._ptAPos);
       gl.enableVertexAttribArray(this._ptACol);
@@ -332,7 +336,7 @@ class Transcend {
     const fadeAlpha = Math.min(Math.max((st - 30) / 5, 0), 1);
     if (fadeAlpha > 0) {
       gl.enable(gl.BLEND);
-      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
       gl.useProgram(this._fadeProg);
       gl.uniform1f(this._fadeUAlpha, fadeAlpha);
       gl.bindBuffer(gl.ARRAY_BUFFER, this._fadeVbo);

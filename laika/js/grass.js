@@ -99,7 +99,7 @@ class Grass {
         const azimuth   = Math.random() * 2 * Math.PI;
         const curvature = 0.005 + 0.015 * Math.random();
         const baseHalfW = 0.001 + 0.001 * Math.random();
-        const bright    = 0.2 + 0.2 * Math.random();
+        const bright    = 0.2 + 0.6 * Math.random();
 
         const lx =  Math.sin(azimuth);
         const lz =  Math.cos(azimuth);
